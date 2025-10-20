@@ -14,23 +14,23 @@ sequenceDiagram
     participant Worker as worker-10001<br/>(Java Container)
     
     %% Request Initiation
-    rect rgb(200, 230, 255)
-    Note over Client,GW: 1. CLIENT REQUEST
+    rect rgb(55, 113, 238)
+    Note over Client,GW: **1. CLIENT REQUEST**
     Client->>+GW: POST /api/v1/calculate/add<br/>{"operand1": 10, "operand2": 5}
     Note right of GW: Reactive: Mono<Result>
     end
     
     %% Plugin Lookup
-    rect rgb(220, 240, 220)
-    Note over GW,REG: 2. PLUGIN LOOKUP
+    rect rgb(75, 133, 248)
+    Note over GW,REG: **2. PLUGIN LOOKUP**
     GW->>+REG: getPlugin("add_numbers")
     REG-->>-GW: PluginSpec(java, JRS:9091, AddPlugin)
     GW->>GW: Build PluginRef & Context
     end
     
     %% Worker Allocation
-    rect rgb(255, 240, 220)
-    Note over GW,JRS: 3. WORKER ALLOCATION
+    rect rgb(45, 93, 218)
+    Note over GW,JRS: **3. WORKER ALLOCATION**
     GW->>+RSC: allocateWorker(pluginRef, context)
     RSC->>+JRS: gRPC AllocateWorkerRequest
     
@@ -50,8 +50,8 @@ sequenceDiagram
     end
     
     %% gRPC PPP Session
-    rect rgb(255, 230, 255)
-    Note over GW,Worker: 4. GRPC PPP SESSION
+    rect rgb(100, 113, 238)
+    Note over GW,Worker: **4. GRPC PPP SESSION**
     GW->>GW: Create channel<br/>"worker-10001:8080"
     GW->>+Worker: gRPC Init(ctx)
     Worker->>Worker: Initialize plugin
@@ -59,8 +59,8 @@ sequenceDiagram
     end
     
     %% Plugin Execution
-    rect rgb(230, 255, 230)
-    Note over GW,Worker: 5. PLUGIN EXECUTION
+    rect rgb(55, 180, 238)
+    Note over GW,Worker: **5. PLUGIN EXECUTION**
     GW->>+Worker: gRPC Invoke(primitive, args, requestId)
     Worker->>Worker: Parse JSON input
     Worker->>Worker: Validate schema
@@ -78,8 +78,8 @@ sequenceDiagram
     end
     
     %% Cleanup
-    rect rgb(255, 220, 220)
-    Note over GW,Worker: 6. CLEANUP & TEARDOWN
+    rect rgb(55, 150, 200)
+    Note over GW,Worker: **6. CLEANUP & TEARDOWN**
     GW->>Worker: Close gRPC channel
     GW->>GW: channel.shutdown()<br/>awaitTermination(5s)
     
@@ -96,8 +96,8 @@ sequenceDiagram
     end
     
     %% Response
-    rect rgb(200, 230, 255)
-    Note over Client,GW: 7. CLIENT RESPONSE
+    rect rgb(65, 105, 225)
+    Note over Client,GW: **7. CLIENT RESPONSE**
     GW-->>-Client: HTTP 200 OK<br/>{"result": 15.0, ...}
     end
     
@@ -118,23 +118,23 @@ sequenceDiagram
     participant Worker as worker-20001<br/>(Python Container)
     
     %% Request Initiation
-    rect rgb(200, 230, 255)
-    Note over Client,GW: 1. CLIENT REQUEST (REACTIVE)
+    rect rgb(55, 113, 238)
+    Note over Client,GW: **1. CLIENT REQUEST (REACTIVE)**
     Client->>+GW: POST /api/v1/calculate/subtract<br/>{"operand1": 10, "operand2": 5}
     Note right of GW: Mono.fromCallable()<br/>subscribeOn(boundedElastic)
     end
     
     %% Plugin Lookup
-    rect rgb(220, 240, 220)
-    Note over GW,REG: 2. PLUGIN LOOKUP
+    rect rgb(75, 133, 248)
+    Note over GW,REG: **2. PLUGIN LOOKUP**
     GW->>+REG: getPlugin("subtract_numbers")
     REG-->>-GW: PluginSpec(python, PRS:9092,<br/>subtract_plugin.py)
     GW->>GW: Build PluginRef & Context<br/>(tenant, user, session, request IDs)
     end
     
     %% Worker Allocation
-    rect rgb(255, 240, 220)
-    Note over GW,PRS: 3. WORKER ALLOCATION (PYTHON)
+    rect rgb(45, 93, 218)
+    Note over GW,PRS: **3. WORKER ALLOCATION (PYTHON)**
     GW->>+RSC: allocateWorker(pluginRef, context)
     RSC->>+PRS: gRPC AllocateWorkerRequest
     Note right of PRS: Python gRPC server<br/>grpc.server()
@@ -155,8 +155,8 @@ sequenceDiagram
     end
     
     %% gRPC Communication
-    rect rgb(255, 230, 255)
-    Note over GW,Worker: 4. GRPC PPP PROTOCOL
+    rect rgb(100, 113, 238)
+    Note over GW,Worker: **4. GRPC PPP PROTOCOL**
     GW->>GW: ManagedChannel<br/>.forTarget("worker-20001:8080")
     GW->>+Worker: gRPC Init(ctx)
     Worker->>Worker: Load subtract_plugin.py
@@ -165,8 +165,8 @@ sequenceDiagram
     end
     
     %% Plugin Execution
-    rect rgb(230, 255, 230)
-    Note over GW,Worker: 5. PLUGIN EXECUTION
+    rect rgb(55, 180, 238)
+    Note over GW,Worker: **5. PLUGIN EXECUTION**
     GW->>+Worker: gRPC Invoke(STREAMING)<br/>InvokeRequest {<br/>  primitive: "subtract_numbers",<br/>  arguments: ByteString(JSON),<br/>  request_id: UUID<br/>}
     
     Worker->>Worker: json.loads(json_str)
@@ -187,8 +187,8 @@ sequenceDiagram
     end
     
     %% Cleanup
-    rect rgb(255, 220, 220)
-    Note over GW,Worker: 6. TEARDOWN & CLEANUP
+    rect rgb(55, 150, 200)
+    Note over GW,Worker: **6. TEARDOWN & CLEANUP**
     GW->>Worker: Close channel
     GW->>GW: channel.shutdown()
     
@@ -208,8 +208,8 @@ sequenceDiagram
     end
     
     %% Response
-    rect rgb(200, 230, 255)
-    Note over Client,GW: 7. REACTIVE RESPONSE
+    rect rgb(65, 105, 225)
+    Note over Client,GW: **7. REACTIVE RESPONSE**
     GW->>GW: Mono publishes result
     GW-->>-Client: HTTP 200 OK<br/>{"result": 5.0,<br/> "operation": "subtract",<br/> "operand1": 10.0,<br/> "operand2": 5.0}
     end
