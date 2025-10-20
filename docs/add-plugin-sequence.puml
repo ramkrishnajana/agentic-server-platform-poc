@@ -1,0 +1,187 @@
+@startuml Add Plugin API Flow (Java)
+!theme plain
+title Add Plugin API Call - Complete Flow (Java Worker)
+
+actor Client
+participant "Plugin Gateway\n(Spring WebFlux\nNetty:8080)" as Gateway
+participant "Plugin Registry" as Registry
+participant "Runtime Supervisor\nClient (gRPC)" as RSClient
+participant "Java Runtime\nSupervisor\n(gRPC:9091)" as JRS
+participant "Docker Engine" as Docker
+participant "Worker Container\nworker-10001\n(Java Plugin)" as Worker
+database "Worker State" as State
+
+== 1. Client Initiates Request ==
+Client -> Gateway: POST /api/v1/calculate/add\nContent-Type: application/json\n{"operand1": 10, "operand2": 5}
+activate Gateway
+note right of Gateway
+  WebFlux reactive handler
+  Returns Mono<CalculationResult>
+end note
+
+== 2. Plugin Lookup ==
+Gateway -> Registry: getPlugin("add_numbers")
+activate Registry
+note right of Registry
+  Registry contains:
+  - id: "add_numbers"
+  - version: "1.0.0"
+  - language: "java"
+  - runtime: "java-runtime-supervisor:9091"
+  - entrypoint: "AddPlugin"
+end note
+Registry --> Gateway: PluginSpec(java, JRS:9091, AddPlugin)
+deactivate Registry
+
+== 3. Build Context ==
+Gateway -> Gateway: Build PluginRef & Context
+note right of Gateway
+  PluginRef:
+    - id: "add_numbers"
+    - version: "1.0.0"
+    - language: "java"
+    - entrypoint: "AddPlugin"
+  
+  Context:
+    - tenant_id: "demo-tenant"
+    - user_id: "demo-user"
+    - session_id: UUID
+    - request_id: UUID
+    - primitive: "add_numbers"
+end note
+
+== 4. Allocate Worker ==
+Gateway -> RSClient: allocateWorker(runtimeAddress, pluginRef, context)
+activate RSClient
+
+RSClient -> JRS: gRPC AllocateWorkerRequest\n{\n  plugin: PluginRef,\n  ctx: Context,\n  soft_deadline: 30s,\n  force_fresh_process: true\n}
+activate JRS
+note right of JRS
+  Runtime Supervisor Service
+  @GrpcService
+  RuntimeSupervisorImpl
+end note
+
+== 5. Spawn Worker Container ==
+JRS -> State: port_counter++ (10001)
+JRS -> Docker: docker run \\n  --name worker-10001 \\n  --network agentic-server-platform-poc_agentic-network \\n  -e WORKER_ID=worker-10001 \\n  -e PLUGIN_ID=add_numbers \\n  -d --rm \\n  java-plugin-add:latest
+activate Docker
+Docker -> Docker: Pull image (if not cached)
+Docker -> Docker: Create container
+Docker -> Worker: Start container
+activate Worker
+note right of Worker
+  Spring Boot Application
+  gRPC Server (PPP)
+  Listening on port 8080
+  inside container
+end note
+Docker --> JRS: Container ID
+deactivate Docker
+
+JRS -> JRS: Sleep 4000ms (DNS propagation)
+note right of JRS
+  Wait for:
+  1. Container to start
+  2. Spring Boot to initialize
+  3. gRPC server to bind
+  4. DNS to propagate name
+end note
+
+JRS -> State: Store worker info\nworkers.put("worker-10001", WorkerProcess)
+
+JRS --> RSClient: AllocateWorkerResponse\n{\n  admission: ADMITTED,\n  handle: {\n    worker_id: "worker-10001",\n    runtime: "java"\n  }\n}
+deactivate JRS
+
+RSClient --> Gateway: WorkerHandle(worker-10001)
+deactivate RSClient
+
+== 6. Wait for DNS ==
+Gateway -> Gateway: Sleep 1000ms
+note right of Gateway
+  Additional wait for
+  DNS propagation in
+  Docker network
+end note
+
+== 7. Execute Plugin via PPP (Platform-Plugin Protocol) ==
+Gateway -> Gateway: Build worker gRPC channel\nAddress: "worker-10001:8080"
+note right of Gateway
+  ManagedChannel using
+  container name as hostname
+  within Docker network
+end note
+
+Gateway -> Worker: gRPC ToolPlugin.Init()\nInitRequest {\n  ctx: {\n    tenant_id, user_id,\n    session_id, correlation_id\n  }\n}
+Worker -> Worker: Initialize plugin session
+Worker --> Gateway: InitResponse {\n  ok: true,\n  message: "Add plugin ready",\n  caps: {"operation": "add"}\n}
+
+Gateway -> Worker: gRPC ToolPlugin.Invoke() [STREAMING]\nInvokeRequest {\n  ctx: Context,\n  primitive: "add_numbers",\n  version: "1.0.0",\n  arguments: JSON({\n    "operand1": 10,\n    "operand2": 5\n  }),\n  request_id: UUID\n}
+
+Worker -> Worker: Parse JSON input\nCalculationRequest.getOperand1()\nCalculationRequest.getOperand2()
+Worker -> Worker: Validate input schema
+
+== 8. Plugin Execution & Progress Streaming ==
+Worker -> Worker: Log: "Adding 10.0 + 5.0"
+Worker -> Gateway: Stream: PluginMessage {\n  progress: {\n    request_id: UUID,\n    task_id: UUID,\n    percent: 50.0,\n    message: "Performing addition..."\n  }\n}
+
+Worker -> Worker: result = 10.0 + 5.0 = 15.0
+
+Worker -> Worker: Build CalculationResult\nSerialize to JSON
+
+Worker -> Gateway: Stream: PluginMessage {\n  completed: {\n    request_id: UUID,\n    task_id: UUID,\n    output: JSON({\n      "result": 15.0,\n      "operation": "add",\n      "operand1": 10.0,\n      "operand2": 5.0\n    })\n  }\n}
+
+Gateway -> Gateway: Parse JSON output\nDeserialize to CalculationResult
+
+Gateway -> Gateway: Validate output schema
+
+== 9. Close Worker gRPC Channel ==
+Gateway -> Worker: Close gRPC channel
+Gateway -> Gateway: channel.shutdown()\nawaitTermination(5s)
+note right of Gateway
+  Graceful shutdown of
+  gRPC connection to worker
+end note
+
+== 10. Release Worker ==
+Gateway -> RSClient: releaseWorker(runtimeAddress, worker-10001, "execution_complete")
+activate RSClient
+
+RSClient -> JRS: gRPC ReleaseWorkerRequest {\n  worker_id: "worker-10001",\n  reason: "execution_complete"\n}
+activate JRS
+
+JRS -> State: workers.remove("worker-10001")
+
+JRS -> Docker: docker stop worker-10001
+activate Docker
+Docker -> Worker: SIGTERM signal
+deactivate Worker
+note right of Worker
+  Container stops
+  --rm flag auto-removes it
+end note
+Docker -> Docker: Remove container
+Docker --> JRS: Container stopped & removed
+deactivate Docker
+
+JRS --> RSClient: ReleaseWorkerResponse {\n  stats: {}\n}
+deactivate JRS
+
+RSClient --> Gateway: Success
+deactivate RSClient
+
+== 11. Return Result to Client ==
+Gateway --> Client: HTTP 200 OK\nContent-Type: application/json\n{\n  "result": 15.0,\n  "operation": "add",\n  "operand1": 10.0,\n  "operand2": 5.0\n}
+deactivate Gateway
+
+note over Client, Worker
+  **Total Time**: ~5-6 seconds
+  - Worker spawn: ~4s
+  - DNS propagation: ~1s
+  - Execution: ~100ms
+  - Cleanup: ~1s
+end note
+
+@enduml
+
+

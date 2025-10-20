@@ -1,0 +1,243 @@
+@startuml Subtract Plugin API Flow (Python)
+!theme plain
+title Subtract Plugin API Call - Complete Flow (Python Worker)
+
+actor Client
+participant "Plugin Gateway\n(Spring WebFlux\nNetty:8080)" as Gateway
+participant "Plugin Registry" as Registry
+participant "Runtime Supervisor\nClient (gRPC)" as RSClient
+participant "Python Runtime\nSupervisor\n(gRPC:9092)" as PRS
+participant "Docker Engine" as Docker
+participant "Worker Container\nworker-20001\n(Python Plugin)" as Worker
+database "Worker State" as State
+
+== 1. Client Initiates Request ==
+Client -> Gateway: POST /api/v1/calculate/subtract\nContent-Type: application/json\n{"operand1": 10, "operand2": 5}
+activate Gateway
+note right of Gateway
+  WebFlux reactive handler
+  Mono.fromCallable() wraps
+  blocking gRPC calls
+  subscribeOn(boundedElastic())
+end note
+
+== 2. Plugin Lookup ==
+Gateway -> Registry: getPlugin("subtract_numbers")
+activate Registry
+note right of Registry
+  Registry contains:
+  - id: "subtract_numbers"
+  - version: "1.0.0"
+  - language: "python"
+  - runtime: "python-runtime-supervisor:9092"
+  - entrypoint: "subtract_plugin.py"
+end note
+Registry --> Gateway: PluginSpec(python, PRS:9092, subtract_plugin.py)
+deactivate Registry
+
+== 3. Build Context ==
+Gateway -> Gateway: Build PluginRef & Context
+note right of Gateway
+  PluginRef:
+    - id: "subtract_numbers"
+    - version: "1.0.0"
+    - language: "python"
+    - entrypoint: "subtract_plugin.py"
+  
+  Context:
+    - tenant_id: "demo-tenant"
+    - user_id: "demo-user"
+    - session_id: UUID
+    - request_id: UUID
+    - primitive: "subtract_numbers"
+end note
+
+== 4. Allocate Worker ==
+Gateway -> RSClient: allocateWorker(\n  "python-runtime-supervisor:9092",\n  pluginRef,\n  context\n)
+activate RSClient
+
+RSClient -> PRS: gRPC AllocateWorkerRequest\n{\n  plugin: PluginRef,\n  ctx: Context,\n  soft_deadline: 30s,\n  force_fresh_process: true\n}
+activate PRS
+note right of PRS
+  Python gRPC Service
+  PythonRuntimeSupervisor
+  grpc.server()
+end note
+
+== 5. Spawn Python Worker Container ==
+PRS -> State: port_counter++ (20001)
+PRS -> Docker: subprocess.run([\n  "docker", "run",\n  "--name", "worker-20001",\n  "--network", "agentic-server-platform-poc_agentic-network",\n  "-e", "WORKER_ID=worker-20001",\n  "-e", "PLUGIN_ID=subtract_numbers",\n  "-d", "--rm",\n  "python-plugin-subtract:latest"\n])
+activate Docker
+Docker -> Docker: Pull image (if not cached)
+Docker -> Docker: Create container
+Docker -> Worker: Start container
+activate Worker
+note right of Worker
+  Python gRPC Server
+  subtract_plugin.py
+  Listening on port 8080
+  inside container
+end note
+Docker --> PRS: Container ID
+deactivate Docker
+
+PRS -> PRS: time.sleep(4) # DNS propagation
+note right of PRS
+  Wait for:
+  1. Container to start
+  2. Python process to initialize
+  3. gRPC server to bind
+  4. Docker DNS to propagate
+end note
+
+PRS -> State: Store worker info\nworkers["worker-20001"] = WorkerProcess
+
+PRS --> RSClient: AllocateWorkerResponse\n{\n  admission.status: ADMITTED,\n  handle: {\n    worker_id: "worker-20001",\n    runtime: "python"\n  }\n}
+deactivate PRS
+
+RSClient --> Gateway: WorkerHandle(worker-20001)
+deactivate RSClient
+
+== 6. Wait for DNS Propagation ==
+Gateway -> Gateway: Thread.sleep(1000)
+note right of Gateway
+  Additional wait to ensure
+  container name is resolvable
+  via Docker internal DNS
+end note
+
+== 7. Establish gRPC Connection to Worker ==
+Gateway -> Gateway: Create ManagedChannel\nforTarget("worker-20001:8080")\n.usePlaintext()\n.build()
+note right of Gateway
+  Docker network DNS resolves
+  "worker-20001" to container IP
+end note
+
+Gateway -> Worker: gRPC ToolPlugin.Init()\nInitRequest {\n  ctx: {\n    tenant_id: "demo-tenant",\n    user_id: "demo-user",\n    session_id: UUID,\n    correlation_id: requestId\n  }\n}
+Worker -> Worker: Initialize Python plugin\nsubtract_plugin.py loaded
+Worker --> Gateway: InitResponse {\n  ok: True,\n  message: "Subtract plugin ready",\n  caps: {"operation": "subtract"}\n}
+
+== 8. Invoke Plugin ==
+Gateway -> Worker: gRPC ToolPlugin.Invoke() [STREAMING]\nInvokeRequest {\n  ctx: Context,\n  primitive: "subtract_numbers",\n  version: "1.0.0",\n  arguments: Json.value(\n    bytes('{"operand1": 10, "operand2": 5}')\n  ),\n  request_id: UUID\n}
+
+Worker -> Worker: Decode ByteString to JSON
+Worker -> Worker: json.loads(json_input)
+Worker -> Worker: Parse: operand1=10, operand2=5
+Worker -> Worker: Validate input schema
+
+== 9. Plugin Execution with Progress ==
+Worker -> Worker: Log: "Subtracting 10.0 - 5.0"
+Worker -> Gateway: Stream: PluginMessage {\n  progress: Progress {\n    request_id: UUID,\n    task_id: UUID,\n    percent: 50.0,\n    message: "Performing subtraction...",\n    at: Timestamp(now)\n  }\n}
+note left of Gateway
+  WebFlux receives
+  streamed progress
+  updates
+end note
+
+Worker -> Worker: result = 10.0 - 5.0 = 5.0
+
+Worker -> Worker: Build result dict:\n{\n  "result": 5.0,\n  "operation": "subtract",\n  "operand1": 10.0,\n  "operand2": 5.0\n}
+
+Worker -> Worker: json.dumps(result)\nEncode to ByteString
+
+Worker -> Gateway: Stream: PluginMessage {\n  completed: Completed {\n    request_id: UUID,\n    task_id: UUID,\n    output: Json.value(\n      bytes('{"result":5.0,...}')\n    )\n  }\n}
+
+== 10. Process Result ==
+Gateway -> Gateway: Extract output from stream
+Gateway -> Gateway: output.getValue().toStringUtf8()
+Gateway -> Gateway: objectMapper.readValue(\n  jsonOutput,\n  CalculationResult.class\n)
+Gateway -> Gateway: Validate output schema
+note right of Gateway
+  Result:
+  - result: 5.0
+  - operation: "subtract"
+  - operand1: 10.0
+  - operand2: 5.0
+end note
+
+== 11. Close gRPC Channel ==
+Gateway -> Worker: Close gRPC channel
+Gateway -> Gateway: channel.shutdown()\n.awaitTermination(5, SECONDS)
+note right of Gateway
+  Graceful shutdown:
+  1. Stop accepting requests
+  2. Wait for in-flight RPCs
+  3. Close connection
+  4. Release resources
+end note
+
+== 12. Release Worker ==
+Gateway -> RSClient: releaseWorker(\n  "python-runtime-supervisor:9092",\n  "worker-20001",\n  "execution_complete"\n)
+activate RSClient
+
+RSClient -> PRS: gRPC ReleaseWorkerRequest {\n  worker_id: "worker-20001",\n  reason: "execution_complete"\n}
+activate PRS
+
+PRS -> State: worker = workers.pop("worker-20001")
+note right of PRS
+  Remove from active
+  worker tracking
+end note
+
+== 13. Destroy Worker Container ==
+PRS -> Docker: subprocess.run([\n  "docker", "stop",\n  "worker-20001"\n], timeout=10)
+activate Docker
+Docker -> Worker: Send SIGTERM
+deactivate Worker
+note right of Worker
+  Container gracefully
+  shuts down
+end note
+Docker -> Docker: Wait for shutdown (max 10s)
+Docker -> Docker: Auto-remove (--rm flag)
+note right of Docker
+  Container completely
+  removed from system
+  No cleanup needed
+end note
+Docker --> PRS: Exit code 0
+deactivate Docker
+
+PRS -> PRS: Log: "Worker worker-20001 stopped"
+
+PRS --> RSClient: ReleaseWorkerResponse {\n  stats: {}\n}
+deactivate PRS
+
+RSClient --> Gateway: Success
+deactivate RSClient
+
+== 14. Return Result to Client ==
+Gateway -> Gateway: Mono.fromCallable() completes
+Gateway -> Gateway: Reactor publishes result
+Gateway --> Client: HTTP 200 OK\nContent-Type: application/json\n{\n  "result": 5.0,\n  "operation": "subtract",\n  "operand1": 10.0,\n  "operand2": 5.0\n}
+deactivate Gateway
+
+note over Client, Worker
+  **Complete Lifecycle Summary**
+  
+  Phase 1: Allocation (4-5s)
+    - Worker spawn: ~4s
+    - DNS wait: ~1s
+  
+  Phase 2: Execution (100-200ms)
+    - Init: ~20ms
+    - Invoke: ~80ms
+    - Progress streaming
+  
+  Phase 3: Cleanup (~1s)
+    - Channel close: ~100ms
+    - Container stop: ~500ms
+    - Auto-remove: ~100ms
+  
+  **Total**: ~5-7 seconds (ephemeral mode)
+  
+  **Isolation**: Complete
+    - Separate container per request
+    - No shared state
+    - Independent crash domain
+    - Auto-cleanup on exit
+end note
+
+@enduml
+
+

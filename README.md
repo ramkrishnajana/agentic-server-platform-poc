@@ -224,6 +224,18 @@ docker ps | grep worker
 
 You should see containers like `worker-10001`, `worker-10002`, etc.
 
+## Detailed Sequence Diagrams
+
+📊 **Complete UML diagrams** showing the entire request flow are available in the [`docs/`](docs/) directory:
+
+- **Add Plugin Flow** (Java): PlantUML and Mermaid diagrams showing 14 steps from API call to worker destruction
+- **Subtract Plugin Flow** (Python): Detailed Python-specific implementation flow
+- **Reactive WebFlux Flow**: How Spring WebFlux handles non-blocking I/O
+- **Protocol Stack**: 6-layer architecture visualization
+- **Network Topology**: Docker networking and DNS resolution
+
+View diagrams online in [`docs/API-FLOW-DIAGRAMS.md`](docs/API-FLOW-DIAGRAMS.md) (Mermaid renders in GitHub) or use PlantUML tools for `.puml` files.
+
 ## Cleanup
 
 Stop and remove all containers:
