@@ -1,0 +1,26 @@
+# GraalVM Native Image Dockerfile for Plugin Gateway
+# Build time: 5-10 minutes
+# Runtime: Faster startup, lower memory footprint
+
+FROM ghcr.io/graalvm/graalvm-community:17 AS builder
+WORKDIR /workspace
+
+# Install native-image
+RUN gu install native-image
+
+# Copy source and Maven
+COPY . .
+RUN chmod +x mvnw
+
+# Build native image
+RUN ./mvnw -Pnative package -DskipTests -pl plugin-gateway -am
+
+FROM ubuntu:22.04
+WORKDIR /app
+
+# Copy native executable
+COPY --from=builder /workspace/plugin-gateway/target/plugin-gateway /app/app
+
+EXPOSE 8080
+ENTRYPOINT ["./app"]
+

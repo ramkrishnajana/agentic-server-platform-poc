@@ -44,9 +44,9 @@ public class WorkerManager {
         pb.redirectErrorStream(true);
         Process process = pb.start();
         
-        // Wait a bit for container to start
+        // Wait for container to start and DNS to propagate
         try {
-            Thread.sleep(2000);
+            Thread.sleep(4000);  // Increased to 4 seconds for DNS propagation
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }

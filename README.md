@@ -9,7 +9,7 @@ This is a Proof of Concept implementation of the Agentic Server Platform demonst
 
 ```
 ┌─────────────────────┐
-│  Plugin Gateway     │  (Spring Boot on port 8080)
+│  Plugin Gateway     │  (Spring WebFlux Reactive on port 8080)
 │  (REST API)         │
 └──────────┬──────────┘
            │
@@ -32,9 +32,11 @@ This is a Proof of Concept implementation of the Agentic Server Platform demonst
 
 ## Technology Stack
 
-- **Spring Boot 3.2**: Plugin Gateway and Java Runtime Supervisor
+- **Spring Boot 3.2 + WebFlux**: Reactive non-blocking Plugin Gateway and Java components
+- **Reactor**: Reactive streams implementation (Mono/Flux)
 - **gRPC 1.58.0**: Inter-service communication (Runtime Supervisor API and Platform-Plugin Protocol)
 - **Protocol Buffers 3.24.0**: Message definitions
+- **GraalVM Native Image**: Optional AOT compilation support (see Dockerfile.native files)
 - **Docker**: Containerization and isolation (eclipse-temurin:17-jre base images)
 - **Maven 3.9**: Build tool for Java components
 - **Python 3.11**: Python Runtime Supervisor and Python plugins
@@ -101,6 +103,8 @@ This will:
   - Python Runtime Supervisor (gRPC port 9092)
 
 Wait 10-15 seconds for services to fully initialize.
+
+**Note**: Worker images must be built BEFORE starting the platform, otherwise worker spawning will fail.
 
 ### 4. Verify Services
 
@@ -235,6 +239,45 @@ docker rmi java-plugin-add:latest
 docker rmi java-plugin-multiply:latest
 docker rmi python-plugin-subtract:latest
 ```
+
+## GraalVM Native Image (Optional)
+
+The project supports building GraalVM native images for faster startup and lower memory footprint.
+
+### Benefits of Native Images
+- ⚡ **Faster Startup**: ~50-100ms vs 2-3 seconds (JVM)
+- 💾 **Lower Memory**: ~50-100MB vs 150-200MB (JVM)
+- 📦 **Smaller Images**: Native executables are smaller
+
+### Building Native Images
+
+**Prerequisites**: GraalVM with native-image installed (or use Docker build)
+
+#### Option 1: Using Maven Profile (Requires GraalVM locally)
+```bash
+# Build with native profile
+./mvnw -Pnative package -DskipTests
+```
+
+#### Option 2: Using Dockerfile.native (Recommended)
+```bash
+# Build native image Docker containers
+docker build -t java-plugin-add:native -f java-plugin-add/Dockerfile.native .
+docker build -t java-plugin-multiply:native -f java-plugin-multiply/Dockerfile.native .
+docker build -t plugin-gateway:native -f plugin-gateway/Dockerfile.native .
+```
+
+**Note**: Native image builds take 5-10 minutes per module.
+
+### Using Native Images
+
+Update your docker-compose.yml or runtime configuration to use the `:native` tagged images instead of `:latest`.
+
+**Trade-offs**:
+- ✅ Faster startup (especially for worker containers)
+- ✅ Lower memory footprint
+- ❌ Longer build time (5-10 min vs 30 seconds)
+- ❌ Larger Docker build context
 
 ## Project Structure
 

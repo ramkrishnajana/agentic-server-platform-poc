@@ -5,11 +5,11 @@ import com.webex.agentic.common.model.CalculationResult;
 import com.webex.agentic.gateway.service.PluginExecutionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import reactor.core.publisher.Mono;
 
 /**
- * REST controller for calculation operations
+ * Reactive REST controller for calculation operations using WebFlux
  */
 @RestController
 @RequestMapping("/api/v1/calculate")
@@ -24,36 +24,21 @@ public class CalculationController {
     }
 
     @PostMapping("/add")
-    public ResponseEntity<CalculationResult> add(@RequestBody CalculationRequest request) {
-        try {
-            CalculationResult result = executionService.executeCalculation("add_numbers", request);
-            return ResponseEntity.ok(result);
-        } catch (Exception e) {
-            log.error("Error executing add operation", e);
-            return ResponseEntity.internalServerError().build();
-        }
+    public Mono<CalculationResult> add(@RequestBody CalculationRequest request) {
+        return executionService.executeCalculation("add_numbers", request)
+                .doOnError(e -> log.error("Error executing add operation", e));
     }
 
     @PostMapping("/multiply")
-    public ResponseEntity<CalculationResult> multiply(@RequestBody CalculationRequest request) {
-        try {
-            CalculationResult result = executionService.executeCalculation("multiply_numbers", request);
-            return ResponseEntity.ok(result);
-        } catch (Exception e) {
-            log.error("Error executing multiply operation", e);
-            return ResponseEntity.internalServerError().build();
-        }
+    public Mono<CalculationResult> multiply(@RequestBody CalculationRequest request) {
+        return executionService.executeCalculation("multiply_numbers", request)
+                .doOnError(e -> log.error("Error executing multiply operation", e));
     }
 
     @PostMapping("/subtract")
-    public ResponseEntity<CalculationResult> subtract(@RequestBody CalculationRequest request) {
-        try {
-            CalculationResult result = executionService.executeCalculation("subtract_numbers", request);
-            return ResponseEntity.ok(result);
-        } catch (Exception e) {
-            log.error("Error executing subtract operation", e);
-            return ResponseEntity.internalServerError().build();
-        }
+    public Mono<CalculationResult> subtract(@RequestBody CalculationRequest request) {
+        return executionService.executeCalculation("subtract_numbers", request)
+                .doOnError(e -> log.error("Error executing subtract operation", e));
     }
 }
 

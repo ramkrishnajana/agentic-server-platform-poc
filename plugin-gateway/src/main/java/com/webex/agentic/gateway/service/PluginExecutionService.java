@@ -11,13 +11,15 @@ import io.grpc.ManagedChannelBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.Iterator;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Service that executes plugin operations
+ * Reactive service that executes plugin operations using WebFlux
  */
 @Service
 public class PluginExecutionService {
@@ -33,7 +35,12 @@ public class PluginExecutionService {
         this.runtimeClient = runtimeClient;
     }
 
-    public CalculationResult executeCalculation(String operation, CalculationRequest request) throws Exception {
+    public Mono<CalculationResult> executeCalculation(String operation, CalculationRequest request) {
+        return Mono.fromCallable(() -> executeCalculationBlocking(operation, request))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    private CalculationResult executeCalculationBlocking(String operation, CalculationRequest request) throws Exception {
         log.info("Executing {} operation: {} on {}", operation, request.getOperand1(), request.getOperand2());
 
         // Get plugin spec
@@ -75,6 +82,9 @@ public class PluginExecutionService {
         log.info("Worker allocated: {}", workerId);
 
         try {
+            // Wait for worker DNS to propagate and gRPC server to be ready
+            Thread.sleep(1000);
+            
             // Execute plugin via PPP
             CalculationResult result = executePlugin(
                 pluginSpec,

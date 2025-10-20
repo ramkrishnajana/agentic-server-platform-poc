@@ -5,28 +5,31 @@
 This POC demonstrates a production-grade plugin runtime architecture for an Agentic Server Platform, following the specifications from the architecture notes. The system enables dynamic execution of isolated plugins in separate containers with multi-language support.
 
 **Key Implementation Notes**:
+- ✅ **Spring WebFlux**: Reactive non-blocking REST API using Mono/Flux
 - ✅ **Java 25 Compatible**: No Lombok dependency - uses manual implementations
 - ✅ **ARM64 Support**: Works on M1/M2/M3 Macs with non-Alpine base images
 - ✅ **gRPC 1.58.0**: Compatible with Spring Boot gRPC starters
 - ✅ **Container Networking**: Workers communicate via Docker network names (no port mapping conflicts)
+- ✅ **GraalVM Ready**: Native image build support via Maven profile and Dockerfile.native
 
 ## Architecture Components
 
 ### 1. Plugin Gateway (Port 8080)
-**Technology**: Spring Boot 3.2, Java 17
+**Technology**: Spring Boot 3.2 + WebFlux (Reactive), Java 17
 **Responsibilities**:
-- REST API endpoint for client requests
+- Reactive REST API endpoints for client requests
 - Plugin registry management
 - Runtime supervisor client coordination
 - Request routing to appropriate language runtimes
 - Worker lifecycle orchestration
+- Non-blocking I/O for high concurrency
 
 **Key Classes**:
 - `PluginGatewayApplication`: Main Spring Boot application
-- `CalculationController`: REST API endpoints for calculations
+- `CalculationController`: Reactive REST API endpoints returning Mono<CalculationResult>
 - `PluginRegistry`: Maps primitives to their runtime configurations
 - `RuntimeSupervisorClient`: gRPC client for runtime supervisors
-- `PluginExecutionService`: Orchestrates plugin execution flow
+- `PluginExecutionService`: Orchestrates plugin execution with Reactor (blocking calls wrapped in Mono)
 
 ### 2. Java Runtime Supervisor (Port 9091)
 **Technology**: Spring Boot + gRPC Server
@@ -361,17 +364,19 @@ docker-compose logs -f python-runtime-supervisor
 ## Future Enhancements
 
 1. **Worker Pooling**: Implement warm container pools for frequently-used plugins
-2. **GraalVM Native**: Add native image compilation for faster startup
-3. **Authentication**: Implement mTLS and token-based auth
-4. **Rate Limiting**: Add hierarchical rate limiting (tenant/user/primitive)
-5. **Session Persistence**: Implement checkpoint/resume with Redis
-6. **Monitoring**: Add Prometheus metrics and Grafana dashboards
-7. **Kubernetes**: Create K8s manifests for production deployment
-8. **Resilience**: Add circuit breakers and retry logic
-9. **Health Checks**: Comprehensive health monitoring and auto-recovery
-10. **Multi-tenancy**: Resource quotas and isolation per tenant
-11. **Alpine Images**: Once ARM64 Alpine support improves, switch back for smaller images
-12. **Build Optimization**: Fix protobuf plugin cleanup issues
+2. ~~**GraalVM Native**: Add native image compilation for faster startup~~ ✅ **DONE** - Dockerfile.native available
+3. ~~**Spring WebFlux**: Migrate to reactive non-blocking~~ ✅ **DONE** - Using Reactor Mono/Flux
+4. **Full Reactive Stack**: Make gRPC calls fully reactive (currently wrapped in Mono.fromCallable)
+5. **Authentication**: Implement mTLS and token-based auth
+6. **Rate Limiting**: Add hierarchical rate limiting (tenant/user/primitive)
+7. **Session Persistence**: Implement checkpoint/resume with Redis
+8. **Monitoring**: Add Prometheus metrics and Grafana dashboards
+9. **Kubernetes**: Create K8s manifests for production deployment
+10. **Resilience**: Add circuit breakers and retry logic
+11. **Health Checks**: Comprehensive health monitoring and auto-recovery
+12. **Multi-tenancy**: Resource quotas and isolation per tenant
+13. **Alpine Images**: Once ARM64 Alpine support improves, switch back for smaller images
+14. **Build Optimization**: Fix protobuf plugin cleanup issues
 
 ## Performance Characteristics
 
@@ -473,4 +478,44 @@ COPY plugin-name/target/*.jar app.jar
 **Workaround**: Use `./mvnw package` instead of `./mvnw clean package`
 
 **Root Cause**: File system race condition or permission issue with temp proto files
+
+### Spring WebFlux Migration
+**Change**: Migrated from blocking Spring MVC to reactive Spring WebFlux  
+**Implementation**:
+- Replaced `spring-boot-starter-web` with `spring-boot-starter-webflux`
+- Updated controllers to return `Mono<CalculationResult>` instead of `ResponseEntity<>`
+- Wrapped blocking gRPC calls in `Mono.fromCallable()` with `boundedElastic()` scheduler
+- Maintains compatibility with existing gRPC services
+
+**Benefits**:
+- Non-blocking I/O for better scalability
+- Better resource utilization under high concurrency
+- Reactive error handling with `doOnError()`
+- Foundation for fully reactive gRPC integration
+
+**Code Changes**:
+- `CalculationController`: Methods return `Mono<>` instead of `ResponseEntity<>`
+- `PluginExecutionService`: Blocking logic wrapped in reactive streams
+- Added Project Reactor dependency transitively via `spring-boot-starter-webflux`
+
+### GraalVM Native Image Support
+**Addition**: Added GraalVM native-image build support  
+**Implementation**:
+- Added `native-maven-plugin` to all Java modules
+- Created `Dockerfile.native` for each module
+- Added Maven `native` profile for AOT compilation
+- Configured build args for HTTP/HTTPS support
+
+**Build Options**:
+1. **JVM Mode** (default): `./mvnw package` - Fast build, slower startup
+2. **Native Mode**: `./mvnw -Pnative package` - Slow build, faster startup
+
+**Benefits**:
+- Startup time: ~50-100ms (vs 2-3s JVM)
+- Memory footprint: ~50-100MB (vs 150-200MB JVM)
+- Smaller runtime dependencies
+
+**Trade-offs**:
+- Build time: 5-10 minutes (vs 30 seconds JVM)
+- Requires GraalVM or uses multi-stage Docker build
 

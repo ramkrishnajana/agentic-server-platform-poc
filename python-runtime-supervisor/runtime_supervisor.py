@@ -75,8 +75,8 @@ class PythonRuntimeSupervisor(RuntimeSupervisorServicer):
             logger.info(f"Starting worker with command: {' '.join(cmd)}")
             subprocess.run(cmd, check=True, capture_output=True, text=True)
             
-            # Wait for container to start
-            time.sleep(2)
+            # Wait for container to start and DNS to propagate
+            time.sleep(4)  # Increased to 4 seconds for DNS propagation
             
             # Store worker info
             worker = WorkerProcess(worker_id, request.plugin.id, port, container_name)

@@ -7,7 +7,11 @@ Ensure you have the following installed:
 - **Docker and Docker Compose**
 - **Maven 3.8+** (or use included wrapper)
 
-⚠️ **Note**: This project does NOT use Lombok due to Java 25 compatibility issues. All code uses manual implementations.
+⚠️ **Important Notes**:
+- This project uses **Spring WebFlux** (reactive) instead of Spring MVC for non-blocking I/O
+- **GraalVM native image** support available via Dockerfile.native (optional)
+- **No Lombok** - manual implementations for Java 25 compatibility
+- Worker images **must be built BEFORE** starting the platform
 
 ## Step-by-Step Setup
 
@@ -40,6 +44,12 @@ docker build -t python-plugin-subtract:latest -f python-plugin-subtract/Dockerfi
 ⏱️ **Expected time**: 2-3 minutes (downloads base images on first run)
 
 **Note**: Base images changed from Alpine to Debian for ARM64/M1 Mac compatibility.
+
+**🚀 GraalVM Native Images (Optional)**: For faster startup, you can build native images using `Dockerfile.native`:
+```bash
+docker build -t java-plugin-add:native -f java-plugin-add/Dockerfile.native .
+```
+⏱️ Native builds take 5-10 minutes but result in ~50-100ms startup time.
 
 ### 3. Start the Platform
 
