@@ -1,0 +1,132 @@
+syntax = "proto3";
+
+package webex.runtime.supervisor.v1;
+
+option java_multiple_files = true;
+option java_package = "com.webex.agentic.proto.supervisor";
+option java_outer_classname = "RuntimeSupervisorProto";
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// ----------------------- Core Types ----------------------
+
+message Context {
+  string tenant_id = 1;
+  string user_id = 2;
+  string session_id = 3;
+  string correlation_id = 4;
+  string request_id = 5;
+  string primitive = 6;  // e.g., "add_numbers"
+}
+
+message PluginRef {
+  string id = 1;           // logical plugin/artifact identity
+  string version = 2;      // plugin version
+  string language = 3;     // "python"|"node"|"java"
+  string entrypoint = 4;   // e.g., "add_plugin.py"
+}
+
+message RuntimeHints {
+  uint32 cpu_millis = 1;       // desired CPU
+  uint64 memory_bytes = 2;     // desired memory
+  double priority = 3;         // 0.0..1.0 (scheduler hint)
+  map<string, string> opaque = 4; // language/runtime-specific knobs
+}
+
+// Admission result for AllocateWorker
+message Admission {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    ADMITTED = 1;   // worker will be / is attached
+    QUEUED = 2;     // queued; will start when ready
+    REJECTED = 3;   // hard deny (policy/overload)
+  }
+  
+  Status status = 1;
+  google.protobuf.Duration estimated_start_delay = 2; // ETA if QUEUED
+  string reason = 3; // REJECTED/QUEUED reason
+}
+
+// A short-lived handle that identifies a worker binding for an invocation
+message WorkerHandle {
+  string worker_id = 1;    // unique worker identifier
+  string runtime = 2;      // "python"|"node"|"java"
+  google.protobuf.Timestamp not_before = 3; // admission time window start
+  google.protobuf.Duration ttl = 4; // may reclaim if unused past ttl
+}
+
+// ----------------------- Control Plane ----------------------
+
+message EnsurePluginRequest {
+  PluginRef plugin = 1;
+  RuntimeHints hints = 2;
+  bool prewarm = 3;         // if true, start/maintain warm pool
+  map<string, string> env = 4; // sanitized env to bake into worker shims
+}
+
+message EnsurePluginResponse {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    READY = 1;  // artifacts validated, caches primed (if prewarm)
+  }
+  
+  State state = 1;
+  repeated string warnings = 2;
+}
+
+message AllocateWorkerRequest {
+  PluginRef plugin = 1;
+  Context ctx = 2;
+  RuntimeHints hints = 3;
+  google.protobuf.Duration soft_deadline = 4;
+  bool force_fresh_process = 5;
+}
+
+message AllocateWorkerResponse {
+  Admission admission = 1;
+  WorkerHandle handle = 2;  // present if ADMITTED or QUEUED
+  google.protobuf.Struct queue = 3; // { position, moving_eta, depth } if QUEUED
+}
+
+message ReleaseWorkerRequest {
+  string worker_id = 1;
+  string reason = 2; // "client_closed" | "timeout" | ...
+}
+
+message ReleaseWorkerResponse {
+  google.protobuf.Struct stats = 1; // { cpu_ms, rss_max, duration_ms }
+}
+
+// ----------------------- Health ----------------------
+
+message HealthRequest {}
+
+message HealthResponse {
+  enum Status { 
+    UNKNOWN = 0; 
+    OK = 1; 
+    DEGRADED = 2; 
+    DOWN = 3; 
+  }
+  Status status = 1;
+  google.protobuf.Struct runtimes = 2; // per language pools, crash counts, etc.
+}
+
+// ----------------------- Service ----------------------
+
+service RuntimeSupervisor {
+  // Artifact/caches prep and (optionally) prewarm
+  rpc EnsurePlugin(EnsurePluginRequest) returns (EnsurePluginResponse);
+  
+  // Admission + worker allocation
+  rpc AllocateWorker(AllocateWorkerRequest) returns (AllocateWorkerResponse);
+  
+  // Release/cleanup worker
+  rpc ReleaseWorker(ReleaseWorkerRequest) returns (ReleaseWorkerResponse);
+  
+  // Health check
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+

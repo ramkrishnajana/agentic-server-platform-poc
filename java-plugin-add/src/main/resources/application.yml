@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: java-plugin-add
+
+grpc:
+  server:
+    port: 8080
+
+logging:
+  level:
+    com.webex.agentic: DEBUG
+    io.grpc: INFO
+

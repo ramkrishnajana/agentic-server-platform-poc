@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: java-runtime-supervisor
+
+grpc:
+  server:
+    port: 9091
+
+logging:
+  level:
+    com.webex.agentic: DEBUG
+    io.grpc: INFO
+

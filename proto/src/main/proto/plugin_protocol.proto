@@ -1,0 +1,105 @@
+syntax = "proto3";
+
+package webex.mcp.ppp.v1;
+
+option java_multiple_files = true;
+option java_package = "com.webex.agentic.proto.ppp";
+option java_outer_classname = "PluginProtocolProto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+/*
+ Platform <-> Plugin Protocol (PPP)
+ Design principles:
+ - request_id: maps to upper-layer (e.g., MCP tool call id / JSON-RPC id)
+ - task_id: plugin-assigned identifier for long-running work
+ - Plugin owns internal FSM
+ - Json carries canonical JSON bytes when schema'd payloads are needed
+*/
+
+// ----------------------- Shared Types ----------------------
+
+message Context {
+  string tenant_id = 1;
+  string user_id = 2;
+  string session_id = 3;
+  string correlation_id = 4;
+}
+
+message Json {
+  bytes value = 1; // canonical JSON (UTF-8)
+}
+
+// ----------------------- Request/Response ----------------------
+
+message InitRequest {
+  Context ctx = 1;
+  map<string, string> env = 2; // plugin-configured env
+}
+
+message InitResponse {
+  bool ok = 1;
+  string message = 2;
+  map<string, string> caps = 3; // Optional: plugin capability hints
+}
+
+// Start a unit of work
+message InvokeRequest {
+  Context ctx = 1;
+  string primitive = 2;     // e.g., "add_numbers"
+  string version = 3;       // primitive version
+  Json arguments = 4;       // MUST validate against inputSchema
+  string request_id = 5;    // maps to JSON-RPC id for cancellation
+  string task_id = 6;       // OPTIONAL: plugin may return/echo a stable id
+  map<string, string> attrs = 7; // free-form attributes (trace, route, etc.)
+}
+
+// Progress update
+message Progress {
+  string request_id = 1;
+  string task_id = 2;
+  double percent = 3;       // 0..100
+  string message = 4;
+  google.protobuf.Timestamp at = 5;
+  map<string, double> gauges = 6; // domain counters
+}
+
+// Final successful completion
+message Completed {
+  string request_id = 1;
+  string task_id = 2;
+  Json output = 3;          // must satisfy outputSchema
+}
+
+// Final failure
+message Failed {
+  string request_id = 1;
+  string task_id = 2;
+  string code = 3;          // machine-readable
+  string message = 4;       // human-readable
+  Json details = 5;         // extra context
+}
+
+// ----------------------- Service ----------------------
+
+service ToolPlugin {
+  // Initialize plugin
+  rpc Init(InitRequest) returns (InitResponse);
+  
+  // Invoke a plugin operation
+  rpc Invoke(InvokeRequest) returns (stream PluginMessage);
+  
+  // Health check
+  rpc Health(google.protobuf.Empty) returns (InitResponse);
+}
+
+// Plugin can send different types of messages during execution
+message PluginMessage {
+  oneof payload {
+    Progress progress = 1;
+    Completed completed = 2;
+    Failed failed = 3;
+  }
+}
+

@@ -1,0 +1,2502 @@
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+1 Agentic Server Platform Architecture
+and Design Notes
+Faisal Siyavudeen, fsiyavud@cisco.com
+Table of Contents:
+Functional and Platform Requirements
+Major components
+Key logic
+Session handling logic
+Rate-limiting logic
+MCP Protocol Stack
+Plugin Runtime
+High-level topology
+Isolation model inside a runtime
+Hardening knobs
+Runtime Supervisor API
+Plugin worker shim
+Worker lifecycle and pooling
+Runtime HA and session persistence
+Worker observability
+Egress and data controls
+Kubernetes platform requirements
+Phase 1 considerations
+Interfaces and Contracts
+Primitive Specification
+Sample task primitive spec workflow
+Sample task state machine
+Sample task primitive spec
+MCP tool spec for sample task
+A2A agent card for sample task
+Sample sequence diagrams
+Compiled artifacts
+Schema validation logic
+Platform-Plugin Protocol
+Control Plane APIs
+Metrics and Audit
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+1/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+Data stores
+
+1.1 Functional and Platform Requirements
+Spring Boot + Spring Native (GraalVM) for the MCP server component, using official Java MCP
+Server SDK
+optionally Spring AI MCP Server Starter built on Java SDK.
+MCP only in the first phase, but the platform evolves to Agentic Server Platform later (A2A and
+other protocols).
+Plugin architecture
+dev‑platform team owns the server platform
+service teams register their MCP server entries (e.g., mcp.webexapis.com/cc/mcp,
+.../meetings/mcp, etc.).
+Primitives (tools, resources, prompts) hosted either as in‑platform plugins or via default proxy
+plugin forwarding to a service‑hosted URL.
+Same primitive can belong to multiple catalogs (MCP server, or agent card for a domain)
+Plugins may be Python/Node/Java, run sandboxed with no shared access.
+Internal plugin protocol between platform and plugins is independent of MCP/A2A
+primitives can map to those in specific protocols.
+Common primitive specs (JSON/YAML) checked into the platform repo via PR. Server platform
+generates protocol‑specific specs (MCP tool cards, A2A agent cards) from these.
+The platform must work in-region
+no cross-region data replication needed.
+Must support federated routing and discovery-based routing
+Metrics & events emitted by protocol stacks & plugins
+proxy plugins can stream their metrics into the central feed.
+Rigorous input/output validation against each primitive’s schema.
+Customer admin controls to enable/disable
+Policy granularity
+per MCP server
+per primitive instance
+per protocol (MCP/A2A) for specific users/WCITs with wildcards
+platform exposes config schema & APIs for Control Hub provisioning.
+Hierarchical rate limits
+per‑tenant, per‑WCIT, per‑user, per‑primitive, per‑MCP server
+platform exposes schema & APIs for Control Hub provisioning.
+
+1.2 Major components
+1. Protocol Stack Services
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+2/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+MCP Stack
+Spring Boot WebFlux + Java MCP SDK
+single /mcp endpoint per MCP server
+Streamable HTTP (POST/GET SSE)
+session issuance
+capability negotiation
+tools/resources/prompts
+logging
+progress, cancellation, pagination
+Origin validation
+A2A Stack (future)
+parallel service that loads the same primitives via the common registry and exposes
+A2A wire semantics.
+2. Control‑Plane & Registry
+Primitive Registry & Spec Service
+owns the common primitive spec
+spec compiles to MCP specs (and A2A in the future)
+versioned & PR‑gated via Github.
+stores validated artifacts in Postgres or alternate data store.
+Policy/Entitlements Service
+manages tenant/user/WCIT enablement matrices, scope requirements, and exposure
+switches per protocol and primitive.
+Rate‑Limit Service
+maintains hierarchical config, pushes to edge/middle tier, and enforces via fast Redis
+counters.
+TODO: Decide how rate-limiting is split across Envoy, Protocol Stack, and Plugin
+Gateway
+Admin APIs
+OpenAPI specs
+3. Runtime Services
+Plugin Runtime Services
+Plugin Manager
+lifecycle, sandbox orchestration, health, warm pools.
+Plugin Gateway
+language‑agnostic gRPC (and HTTP/JSON fallback) interface to plugins
+mTLS, per‑call policy enforcement, metrics, events.
+Validates plugin input/output
+TODO: Maybe in worker?
+Proxy (Vanilla) Plugin
+platform‑provided forwarder to service-hosted URLs
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+3/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+policy, auth, and observability injection.
+Session management
+session ownership, session snapshots, session recovery
+4. Webex platform adaptors
+CI/KMS Adapter
+token lease
+envelope encryption for secrets
+Metrics, Logs, Audit Events
+Redis
+session snapshots
+SSE outboxes
+JSON-RPC idempotency ledger
+progress tokens
+rate‑limit counters (whatever is not pushed to Envoy).
+Postgres
+S3?
+
+1.3 Key logic
+1.3.1 Session handling logic
+Any pod can handle any session (stateless pods)
+a request without a session is considered an ephemeral session in itself
+Session affinity for efficient processing
+as much as possible, the same session would be handled by the same pod
+no expectation on connection affinity
+all connections at the pod are considered local
+from ingress/sidecar
+Virtual Server(s) on Kubernetes
+POST/GET on mcp.webexapis.com/<server_name>/mcp
+can the same virtual servers be configured for all MCP server URLs with wildcard?
+mcp.webexapis.com//mcp, or mcp.webexapis.com/
+Confirm with platform team
+wildcards will make new MCP server addition very easy
+Cookie-based stickiness
+the first message creating a session is routed to Pod A
+randomly
+Kubernetes creates a routing key
+routing key is set in a cookie (Set-Cookie) in response
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+4/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+Client will include cookie in further requests
+Kubernetes will route based on cookie
+Session-Id based stickiness
+if cookie is not present, Kubernetes will route based on MCP-Session-Id hash
+first request does not have MCP-Session-Id
+might get routed to Pod A randomly
+subsequent requests have MCP-Session-Id
+might all get routed to Pod B based on Session-Id hash.
+Server re-routing (maybe not needed)
+Server that gets the request finds the server that owns the session (from state)
+route in-cluster, OR
+Send 307 redirect
+verify Kubernetest ingress with reroute without sending to client
+Session ownership mapping in Redis
+If destination pod is not live, claim the session and process on the current node
+two virtual server matches
+match on cookie first, if not, match on Session-Id
+No reliance on whether initialize is required
+Will experiment with both stateful and stateless MCP modes in SDK and choose the
+one that gives best compatibility
+Retain option to switch this via config
+No bearing on session support or routing for our MCP server
+State handling
+Session state in Redis
+Message outbox for server-initiated messages
+size bound, and a TTL (bounded by max session lifetime)
+SSE last-event cursor
+JSON-RPC response ledger
+idempotency for JSON-RPC requests
+map -> session_id+request id, sent_response (memoized)
+map of wcit hash/id to server token
+Verify client support for resumption/last-event-id
+Message outbox and SSE cursor might be relevant only if resumption is
+needed.
+Encrypted server token pairs
+Job to clear old tokens based on expiry timestamp
+Class 3 tokens will be cached outside session state
+Session state handling in local cache when session ids are rebalanced
+TODO: Verify if there are mid-connection pod moves
+A pod that takes over a session will trigger a rebalance notification for that session
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+5/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+Redis PubSub
+All pods that hold in-memory session state for that session will clear that inmemory state
+Server token encryption
+orgId + wcit_hash/id + userid + session_id (only for risk class 2) + risk_class +
+scope_list + expiry_timestamp + (ciphertext) + kms_key_url
+ciphertext = encrypt(token_pair)
+Key rotation
+Key id (url) stored with ciphertext
+No re-encryption on key rotation
+All new writes use new key
+Any data that is decrypted will use new key upon re-encryption
+Risk of long-lived old data that is decrypted with an old stolen key is minimal
+Encrypted data is tokens, and tokens expire
+User data in tokens could still be exfiltrated (small risk)
+Revocation
+Listen on CINS Kafka for WCIT and server token revocation
+If WCIT token is revoked:
+Revoke all server tokens associated with this WCIT
+call CI API
+Clear all Redis entries with this WCIT
+both WCIT ids and server token entries
+Call token revocation API on all pod instances
+in-cluster call
+find how to do this with Kubernetes (do we need Kafka)?
+will cause local in-memory cache clearing
+Mark wcit-hash/id as blocked
+add to a block list in Redis
+If server token is revoked:
+Clear the Redis entry for this server token
+Call token revocation API on all pod instances
+in-cluster call
+Redis Pub/Sub
+will cause local in-memory cache clearing
+If session token timer expires:
+timer run by pod that owns the session
+clear the local cache and Redis entry
+Redis TTL for server token entries
+Admin switches off access to a particular MCP server in Control Hub
+trigger same logic as WCIT revocation (revoke WCIT from our end)
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+6/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+401/403 from downstream service upon tool call
+Re-elicit
+
+1.3.2 Rate-limiting logic
+Rate-limit enforcement order must be "more‑specific" to "less‑specific"
+(primitive > user/wcit > tenant > server > global?)
+Counters kept in Redis per selector hash
+Edge filter (Envoy) short‑circuits gross abuse
+server applies exact counters atomically
+
+1.4 MCP Protocol Stack
+Single /mcp endpoint that accepts POST (one JSON‑RPC message per request) and GET
+(server‑initiated SSE stream). TODO: PoC how same pod can handle multiple MCP server URLs.
+Do we need multiple Java SDK instances?
+WebFlux (Streamable HTTP and SSE).
+Only Streamable HTTP mode.
+Init & lifecycle
+initialize → initialized
+enforce MCP-Protocol-Version on subsequent requests
+set Mcp-Session-Id header
+TODO: PoC stateless mode without initialize
+Capabilities
+tools, resources, prompts, logging, completions are advertised
+Java SDK supports all these
+First phase - only tools and resources?
+backed by primitive registry & plugin gateway
+SSE resumes
+event IDs per stream
+Last-Event-ID resume
+outbox in Redis for replay
+TODO: Figure out how Java SDK sessions can be connected to Redis outbox and
+session store.
+Idempotency
+(tenant, wcit_hash, session, direction, jsonrpc_id) ledger in Redis.
+Replays return previous result if id and hash match
+mismatches are invalid params errors
+protect against duplicate IDs across clients
+Origin checks
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+7/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+required by spec for Streamable HTTP
+reject invalid Origin with 403
+optionally include a JSON‑RPC error with no id
+Supported in Java SDK
+Might not be important since many clients do not send origin, which leads to a pass
+Auth
+Every HTTP call must bear a valid token (WCIT or successor)
+Rate limiting
+TODO: Find what is supported by SDK
+hierarchical keys
+enforced pre‑execute
+plugin receives a pre‑budget
+overages return MCP tool error with isError=true
+not protocol error.
+Rate-limiting at different layers
+Envoy, Protocol Stack, Plugin Gateway?
+Validation
+Validation against MCP schema
+TODO: Check for SDK capability
+Spring Boot GraalVM:
+Build with Spring Boot Native ahead-of-time (AOT)
+Test native images to ensure any non‑Spring, reflective libraries used have runtime hints.
+
+1.5 Plugin Runtime
+An ideal solution will be to have a plugin manager that can spawn a container for every plugin. This,
+along with a warm container pool, will allow excellent isolation for plugins. However, Kubed and CC
+Kubernetes platform teams might now allow this model (we can discuss with them) where we
+manage warm container pool.
+In case we cannot have a container per plugin, we can go with an alterate model given below:
+
+1.5.1 High-level topology
+MCP Server -> Plugin Gateway (stateless) -> Language Runtime (JRS/PRS/NRS)
+├─ Worker process: plugin A (PID 4012)
+├─ Worker process: plugin B (PID 4099)
+└─ Worker process: plugin C (PID 4177)
+
+Plugin Gateway speaks PPP (gRPC) and routes calls to the right language runtime (per
+primitive’s runtime.language ).
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+8/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+Language Runtime (one deployment (service) per language) is a supervisor:
+Accepts Start/Stop/Invoke/Cancel/Health over a small Runtime Supervisor API (gRPC).
+Manages worker processes (one per plugin instance or small pool).
+Streams progress and result chunks back to the gateway, and maps
+timeouts/cancellations.
+
+1.5.2 Isolation model inside a runtime
+Crash of one plugin does not affect others, and there must be no sharing of memory across plugins.
+So, we will go with one OS process per plugin (hard boundary).
+Each worker process runs under the following conditions:
+Runs its own interpreter/runtime:
+Java: a separate JVM process
+with -Xmx /metaspace caps
+CDS/AppCDS to trim footprint.
+Python: a separate CPython process
+per-plugin venv if needed
+resource + prlimit .
+
+Node: a separate Node process
+with memory caps & hardened flags
+Communicates via gRPC over Unix Domain Sockets (UDS) with the runtime supervisor (no
+shared memory).
+Has per-process quotas:
+Memory: prlimit(RLIMIT_AS) / JVM -Xmx / Node --max-old-space-size .
+CPU: RLIMIT_CPU (fail-stop on runaway), nice (priority), optional CPU time accounting.
+FDs/threads: RLIMIT_NOFILE , RLIMIT_NPROC .
+Is killed and restarted independently by the supervisor if it wedges or crashes.
+We are not going with sub-interpreters/classloaders since they share heap or GC/system state. A
+segfault or OOM error can take the whole runtime down. Separate processes avoid that.
+
+1.5.3 Hardening knobs
+Java workers
+Enforce -Xmx , -XX:MaxRAMPercentage , -XX:MaxMetaspaceSize .
+Prefer GraalVM native by doing native builds (faster start, smaller RSS).
+Disable System.exit in the plugin shim; treat it as contract breach (shim intercepts and
+exits with code you map to “plugin crash”).
+Python workers
+Run CPython in a slim venv (only whitelisted packages).
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+9/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+Use resource.setrlimit (soft+hard) at process start; faulthandler for diagnostics.
+Use sys.setrecursionlimit , disable multiprocessing spawn by policy (or cap
+NPROC).
+Node workers**
+Start with: --max-old-space-size=… , --frozen-intrinsics , --disable-proto ,
+--no-addons .
+
+Policy mode ( --experimental-policy ) to restrict module resolution.
+Permission flags ( --experimental-permission ) to deny FS/NET by default and selectively
+allow.
+If the cluster allows unprivileged user namespaces, we can wrap workers with bubblewrap (bwrap)
+or similar to create per-process user/mount/pid namespaces and a minimal read-only root. This
+would give file-system isolation (bind-mount a tiny tree + a writable workdir), no visibility into other
+workers’ /proc and even network (separate netns). However, unprivileged userns might be
+disallowed by platform teams.
+
+1.5.4 Runtime Supervisor API
+This API is used between plugin gateway and language runtime.
+
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+10/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+syntax = "proto3";
+package webex.runtime.supervisor.v1;
+import "google/protobuf/any.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+// ----------------------- Core Types ----------------------message Context {
+string tenant_id = 1;
+string user_id = 2;
+string wcit_hash = 3;
+string session_id = 4;
+
+// MCP session
+
+string correlation_id = 5;
+
+// cross-service trace
+
+string mcp_request_id = 6;
+
+// JSON-RPC id for cancel/idempotency correlation
+
+string primitive = 7;
+
+// e.g., "cdcsr_sweep"
+
+}
+message PluginRef {
+string id = 1;
+
+// logical plugin/artifact identity
+
+string version = 2;
+
+// plugin version
+
+string language = 3;
+
+// "python"|"node"|"java"
+
+string entrypoint = 4;
+
+// e.g., "cdcsr_sweep.py"
+
+string artifact_sha256 = 5;
+
+// optional integrity pin
+
+}
+message RuntimeHints {
+// Hints; LRS is free to ignore or override with policy.
+uint32 cpu_millis = 1;
+
+// desired CPU
+
+uint64 memory_bytes = 2;
+
+// desired memory
+
+double priority = 3;
+
+// 0.0..1.0 (scheduler hint)
+
+map<string,string> opaque = 4; // language/runtime-specific knobs
+}
+// Admission result for AllocateWorker.
+message Admission {
+enum Status {
+STATUS_UNSPECIFIED = 0;
+ADMITTED = 1;
+
+// worker will be / is attached
+
+QUEUED = 2;
+
+// queued; ProxyPpp will start when ready
+
+REJECTED = 3;
+
+// hard deny (policy/overload)
+
+}
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+11/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+Status status = 1;
+google.protobuf.Duration estimated_start_delay = 2; // ETA if QUEUED
+string reason = 3;
+
+// REJECTED/QUEUED reason
+
+}
+// A short-lived handle that identifies a worker binding for an invocation.
+message TunnelHandle {
+string tunnel_id = 1;
+
+// random, unguessable
+
+string runtime = 2;
+
+// "python"|"node"|"java"
+
+string worker_local_id = 3;
+
+// optional, for observability only
+
+google.protobuf.Timestamp not_before = 4; // admission time window start
+google.protobuf.Duration ttl = 5;
+
+// LRS may reclaim if unused past ttl
+
+}
+// Server->Gateway tunnel lifecycle events (out-of-band vs PPP frames).
+message TunnelEvent {
+string tunnel_id = 1;
+enum Type {
+TYPE_UNSPECIFIED = 0;
+ALLOCATION_QUEUED = 1;
+ALLOCATION_STARTED = 2;
+TUNNEL_READY = 3;
+
+// worker attached; PPP frames will be delivered
+
+WORKER_CRASHED = 4;
+
+// worker crashed after start
+
+RUNTIME_OVERLOAD = 5;
+
+// backpressure shedding
+
+ADMISSION_REJECTED = 6;
+
+// late rejection (e.g., policy revocation)
+
+TUNNEL_CLOSED = 7;
+}
+Type type = 2;
+string message = 3;
+google.protobuf.Struct details = 4; // queue position, RSS, etc.
+}
+// ----------------------- Control Plane ----------------------message EnsurePluginRequest {
+PluginRef plugin = 1;
+RuntimeHints hints = 2;
+
+// optional prewarm sizing
+
+bool prewarm = 3;
+
+// if true, start/maintain warm pool
+
+map<string,string> env = 4;
+
+// sanitized env to bake into worker shims
+
+}
+message EnsurePluginResponse {
+enum State {
+STATE_UNSPECIFIED = 0;
+READY = 1;
+
+// artifacts validated, caches primed (if prewarm)
+
+}
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+12/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+State state = 1;
+repeated string warnings = 2;
+}
+message AllocateWorkerRequest {
+PluginRef plugin = 1;
+Context ctx = 2;
+RuntimeHints hints = 3;
+google.protobuf.Duration soft_deadline = 4; // informs admission/queueing
+// If true, LRS should not reuse an existing long-lived worker from pool
+// (e.g., for high-risk isolation); LRS may still decide to override by policy.
+bool force_fresh_process = 5;
+}
+message AllocateWorkerResponse {
+Admission admission = 1;
+TunnelHandle handle = 2;
+
+// present if ADMITTED or QUEUED
+
+google.protobuf.Struct queue = 3;
+
+// { position, moving_eta, depth } if QUEUED
+
+}
+message CloseTunnelRequest {
+string tunnel_id = 1;
+string reason = 2; // "client_closed" | "timeout" | ...
+}
+message CloseTunnelResponse {
+google.protobuf.Struct stats = 1; // { cpu_ms, rss_max, bytes_in, bytes_out, duration
+}
+// Optional: cancel at the runtime layer (PPP cancel still flows inside the tunnel).
+message CancelAllocationRequest {
+string tunnel_id = 1;
+string mcp_request_id = 2; // for correlation; optional
+}
+message CancelAllocationResponse {}
+// Health & Metrics (kept minimal here; can be expanded without breaking the core).
+message HealthRequest {}
+message HealthResponse {
+enum Status { UNKNOWN = 0; OK = 1; DEGRADED = 2; DOWN = 3; }
+Status status = 1;
+google.protobuf.Struct runtimes = 2; // per language pools, crash counts, etc.
+}
+message MetricsStreamRequest {
+// optional filters: plugin id, tenant, runtime
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+13/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+map<string,string> filter = 1;
+}
+message MetricsEvent {
+google.protobuf.Timestamp at = 1;
+string name = 2; // e.g., "worker.start", "worker.crash", "queue.depth"
+map<string,string> labels = 3; // tenant, plugin, runtime, worker_local_id, tunnel_id
+google.protobuf.Struct fields = 4; // numerics
+}
+// Operator-initiated drains (graceful plugin/runtime drain).
+message DrainRequest {
+// If plugin unset, drain whole runtime (e.g., python) on this LRS instance.
+PluginRef plugin = 1;
+bool graceful = 2;
+google.protobuf.Duration deadline = 3;
+}
+message DrainResponse {}
+
+// ----------------------- PPP Tunnel ----------------------// We tunnel PPP messages without the Gateway speaking directly to worker endpoints.
+// The LRS binds the tunnel to the allocated worker process and proxies frames.
+message PppClientFrame {
+string tunnel_id = 1;
+// PPP client->server frame; packed as Any to avoid tight coupling of protos.
+google.protobuf.Any ppp = 2;
+// Optional keepalive to detect broken links even if PPP is quiet.
+bool keepalive = 3;
+}
+message PppServerFrame {
+string tunnel_id = 1;
+oneof payload {
+// Either a PPP server->client frame...
+google.protobuf.Any ppp = 1;
+// ...or a tunnel lifecycle event (e.g., ALLOCATION_QUEUED, TUNNEL_READY)
+TunnelEvent event = 2;
+}
+}
+// ----------------------- Service ----------------------service RuntimeSupervisor {
+// Artifact/caches prep and (optionally) prewarm.
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+14/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+rpc EnsurePlugin(EnsurePluginRequest) returns (EnsurePluginResponse);
+// Admission + worker allocation; produces a short-lived tunnel handle.
+rpc AllocateWorker(AllocateWorkerRequest) returns (AllocateWorkerResponse);
+// Bidi tunnel carrying PPP frames; LRS attaches to worker when ready.
+rpc ProxyPpp(stream PppClientFrame) returns (stream PppServerFrame);
+// Close tunnel and release/cleanup worker per LRS policy.
+rpc CloseTunnel(CloseTunnelRequest) returns (CloseTunnelResponse);
+// Optional runtime-layer cancellation (in addition to PPP cancel inside tunnel).
+rpc CancelAllocation(CancelAllocationRequest) returns (CancelAllocationResponse);
+// Ops
+rpc Health(HealthRequest) returns (HealthResponse);
+rpc MetricsStream(MetricsStreamRequest) returns (stream MetricsEvent);
+rpc Drain(DrainRequest) returns (DrainResponse);
+}
+
+The runtime just hosts the PPP (Platform–Plugin Protocol) gRPC server inside each worker process
+and proxies it via Runtime Supervisor API.
+
+1.5.5 Plugin worker shim
+The shim, which is separately written for each language, embeds the PPP server and the language
+runtime. It has the following functions:
+Boot the plugin (module/class) from the artifact.
+Validate input against the compiled JSON Schema, and validate output if needed.
+Emits progress and chunked results.
+Converts Cancel to interpreter-native cancellation (thread interrupt / signal / async cancel).
+Enforces rlimits immediately on start
+drops privileges to a low-priv uid, if allowed by cluster
+
+1.5.6 Worker lifecycle and pooling
+Pooling modes
+Warm pooled
+for plugins with high use
+fixed min workers per plugin with max cap
+Ephemeral
+spawn per request
+used for high-risk, low-volume plugins
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+15/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+Rolling upgrades
+new workers for version N+1 start
+old workers drain.
+Back-pressure
+per-plugin concurrency limit
+queue with fair scheduling across plugins
+Supervision
+exponential backoff on crash
+circuit breaker if a plugin flaps
+Performance (RSS usage and startup latency)
+GraalVM+CDS for Java
+venv caching for Python
+worker pooling
+
+1.5.7 Runtime HA and session persistence
+The Runtime Service will have the following components to support session persistence.
+1. An active-call table in the plugin gateway database, with one row per tool/resource/prompt call.
+2. An LRS checkpoint store in Redis or Postgres where encrypted state capsules can be stored.
+A plugin that wants to implement session persistence and crash resilience should implement
+additional hooks in the primitive lifecycle.
+onSessionStart(context)
+
+returns an initial state capsule (opaque bytes). Implemented by plugin, called by worker
+shim.
+checkpoint(requestId, seq, stateCapsule)
+
+implemented by worker shim.
+called by plugin whenever there is a meaningful state change.
+the function implementation will encrypt the data before writing to external cache/storage.
+onResume(requestId, stateCapsule, resumeToken)
+
+implemented by plugin, called by worker shim.
+used to restore state after a crash and continue work.
+State capsule is small, versioned, and opaque to the platform. It is encrypted by the platform before
+storage. If a plugin cannot checkpoint, it must declare itself idempotent and accept re-invocation
+with the same idempotency key.
+Once the gateway realises that an LRS node has gone down (via health check on gRPC connection
+or a lease in DB/Redis that times out), it will pick up active calls on that node from the DB. Then, it
+will call AllocateWorker on the LRS service so that a connection is created to a new LRS node.
+
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+16/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+The worker shim on the allocated worker will see that a checkpoint exists for this session, and will
+will call onResume on the plugin so that the plugin can restore state and continue processing.
+
+1.5.8 Worker observability
+Per worker metrics - CPU time, RSS, heap (JVM/Node), GC pauses, invoke latency, QPS, crash
+counters.
+Structured logs - stdout/err captured, tagged with
+(runtime, plugin, workerId, requestId) .
+
+Audit trail - start/finish events with normalized error codes, tied back to MCP request id.
+Rate limits
+enforced before OpenWorker/Invoke
+worker creation is denied if above limits.
+Time limits
+soft (cancel signal) first
+hard per call (SIGKILL on grace exceed)
+
+1.5.9 Egress and data controls
+Default-deny network inside worker
+permit-list defined in plugin schema
+permission flags for Node
+TODO: investigate if a proxy plugin pattern can be implemented for other runtimes
+venv settings?
+Plugin code review?
+plugins not allowed to call the internet directly, they ask the platform’s proxy.
+No secret mount in workers
+all credentials come as scoped tokens via PPP
+
+1.5.10 Kubernetes platform requirements
+Sufficient pod memory to host many workers
+Pod autoscaling on CPU/memory/queue depth?
+no root user, seccomp profile
+may be already a basic requirement
+allow unprivileged userns
+current security posture might block this
+Istio policies to restrict egress
+Ingress traffic only via Plugin gateway
+Egress traffic only via Plugin gateway?
+
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+17/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+Artifact store(read-only) for plugin artifacts (jar/whl/npm tgz) and per-language caches (CDS, pip
+wheels, npm cache)
+S3 bucket with signed URLs?
+
+1.5.11 Phase 1 considerations
+Maybe we will just support Java classes running in the primary pod, and proxies with REST protocol
+initially. We will still have the gRPC PPP from first phase so that it is easy to decouple later. Python
+and Node runtimes can come later - we need a model where we can use warm containers as
+needed per job, or one where multiple jobs can run on the same container with at least crash
+isolation.
+
+1.6 Interfaces and Contracts
+1.6.1 Primitive Specification
+Primitives correspond to either static elements (prompts, for instance), or to units of work. A unit of
+work action typically maps to an MCP tool/resource or an A2A agent skill. We model the unit of work
+as a long-running task with an internal task state machine, periodic progress updates or partial
+responses (streaming media, say), user data collection (elicitation in MCP), and nested delegated
+tasks (sampling in MCP). Not all the tasks will have all these properties, but this definition captures a
+broad set of requirements. The primitive spec for the unit of work will capture these aspects. This
+primitive spec will then be translated to MCP tool/resource spec or A2A agent skill spec as needed.
+Key elements of the primitive spec (TODO: Incomplete. Work with Krishna and flesh this out, based
+on the sample use-case):
+Spec version
+Primitive type
+name, primitive version, owner_alias, description, tags
+exposure
+protocols
+mcp
+enabled (bool), name (optional)
+a2a
+enabled (bool), name (optional)
+runtime
+mode (plugin/proxy)
+language (python/node/java)
+entrypoint (plugin artifact ref or proxy URL)
+resources (cpu, memory etc.)
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+18/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+policy
+auth
+scopes
+rateLimits
+values are different granularity
+riskClass
+primitiveSchema
+#ref - specific schema depending on the primitive type
+for tool/agent, resource, prompt etc.
+
+1.6.1.1 Sample task primitive spec workflow
+To illustrate the workflow for exposing a task primitive, let us consider a complex task, for instance a
+cross-domain compliance sweep and remediation task.
+This task involves scanning Meetings, Contact Center, and Calling artifacts for records matching
+compliance criteria (eg:- PII or restricted phrases), computing risk scores, optionally
+redact/quarantine, and produce a signed compliance report. It is long-running, with a task state
+machine, periodic progress, user approvals (elicitation), and delegated subtasks (LLM classification,
+redaction suggestions, etc.).
+1.6.1.1.1 Sample task state machine
+The internal state machine for such a task might look like this:
+
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+19/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+"state_machine": {
+"initial": "INIT",
+"states": {
+"INIT": { "on": { "VALIDATE": "VALIDATING_INPUT" } },
+"VALIDATING_INPUT": {
+"onEnter": ["checkTenantAccess", "validateDateRange", "compileQuery"],
+"on": { "OK": "INDEXING", "NEEDS_INPUT": "AWAITING_INPUT", "ERROR": "FAILED" }
+},
+"AWAITING_INPUT": {
+"type": "wait-user",
+"elicitation": {
+"id": "gather_missing_policy",
+"title": "Legal Hold Policy Required",
+"fields": [
+{ "name": "legalHoldPolicyId", "label": "Legal Hold Policy ID", "type": "st
+]
+},
+"on": { "INPUT_SUPPLIED": "INDEXING", "CANCEL": "CANCELLED" }
+},
+"INDEXING": {
+"onEnter": ["indexSources"],
+"on": { "OK": "SCANNING", "ERROR": "FAILED" }
+},
+"SCANNING": {
+"type": "parallel",
+"branches": ["SCAN_MEETINGS", "SCAN_CONTACT_CENTER", "SCAN_ADMIN"],
+"join": "AGGREGATING"
+},
+"SCAN_MEETINGS": {
+"onEnter": ["listMeetings", "delegateLLMClassification"],
+"on": { "OK": "DONE_MEETINGS", "ERROR": "FAILED" }
+},
+"DONE_MEETINGS": {},
+"SCAN_CONTACT_CENTER": {
+"onEnter": ["listCalls", "delegateVoiceRedactionSuggestions"],
+"on": { "OK": "DONE_CC", "ERROR": "FAILED" }
+},
+"DONE_CC": {},
+"SCAN_ADMIN": {
+"onEnter": ["scanAuditLogs"],
+"on": { "OK": "DONE_ADMIN", "ERROR": "FAILED" }
+},
+"DONE_ADMIN": {},
+"AGGREGATING": {
+"onEnter": ["mergeFindings", "scoreRisk"],
+"on": { "OK": "REMEDIATION_DECISION", "ERROR": "FAILED" }
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+20/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+},
+"REMEDIATION_DECISION": {
+"type": "wait-user",
+"elicitation": {
+"id": "approve_remediation",
+"title": "Approve remediation?",
+"fields": [
+{ "name": "approveRedaction", "type": "boolean", "label": "Approve redactio
+{ "name": "approveQuarantine", "type": "boolean", "label": "Approve quarant
+]
+},
+"on": { "APPROVED": "REMEDIATING", "DECLINED": "FINALIZING" }
+},
+"REMEDIATING": {
+"onEnter": ["applyRemediation"],
+"on": { "OK": "FINALIZING", "ERROR": "FAILED" }
+},
+"FINALIZING": {
+"onEnter": ["composeReport", "signReport"],
+"on": { "OK": "COMPLETED", "ERROR": "FAILED" }
+},
+"COMPLETED": { "type": "terminal" },
+"FAILED": { "type": "terminal" },
+"CANCELLED": { "type": "terminal" }
+}
+
+1.6.1.1.2 Sample task primitive spec
+The common specification for this task primitive is given below:
+
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+21/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+{
+// id could be namespaced - we can also have a UUID-based id, a namespaced name, and
+"id": "cdcsr",
+"name": "Cross-Domain Compliance Sweep & Remediation",
+"type": "task",
+"version": "1.0.1",
+"owner": "devex@webex.com",
+"summary": "Search Meetings/Contact Center/Admin for compliance violations, score ris
+"tags": ["compliance", "pii", "redaction", "reporting", "admin"],
+"capabilities": {
+"supportsProgress": true,
+"supportsCancellation": true,
+"supportsElicitation": true,
+"supportsDelegation": true,
+"maxRuntimeSeconds": 7200
+},
+"primitiveSchema": {
+"input_schema": {
+"$schema": "https://json-schema.org/draft/2020-12/schema",
+"type": "object",
+"additionalProperties": false,
+"required": ["tenantId", "query", "dateRange"],
+"properties": {
+"tenantId": { "type": "string", "description": "Webex CI orgID" },
+"query": { "type": "string", "description": "Search query (KQL-like or natural
+"dateRange": {
+"type": "object",
+"required": ["from", "to"],
+"properties": {
+"from": { "type": "string", "format": "date-time" },
+"to": { "type": "string", "format": "date-time" }
+}
+},
+"domains": {
+"type": "array",
+"items": { "enum": ["meetings", "contact_center", "calling","messaging", "a
+"default": ["meetings", "contact_center", "admin"]
+},
+"severityThreshold": { "type": "number", "minimum": 0, "maximum": 1, "default"
+"actions": {
+"type": "object",
+"properties": {
+"redact": { "type": "boolean", "default": false },
+"quarantine": { "type": "boolean", "default": false },
+"notifyEmails": {
+"type": "array",
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+22/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+"items": { "type": "string", "format": "email" },
+"default": []
+}
+}
+},
+"legalHoldPolicyId": { "type": "string", "nullable": true }
+}
+},
+"output_schema": {
+"$schema": "https://json-schema.org/draft/2020-12/schema",
+"type": "object",
+"required": ["taskId", "status", "summary"],
+"properties": {
+"taskId": { "type": "string" },
+"status": { "enum": ["completed", "failed", "cancelled"] },
+"summary": {
+"type": "object",
+"properties": {
+"totalItems": { "type": "integer" },
+"flaggedItems": { "type": "integer" },
+"byDomain": {
+"type": "object",
+"properties": {
+"meetings": { "type": "integer" },
+"contact_center": { "type": "integer" },
+"admin": { "type": "integer" }
+}
+},
+"remediation": {
+"type": "object",
+"properties": {
+"redacted": { "type": "integer" },
+"quarantined": { "type": "integer" }
+}
+},
+"reportUri": { "type": "string", "format": "uri" }
+}
+}
+},
+"artifacts": {
+"type": "array",
+"items": {
+"type": "object",
+"required": ["type", "uri"],
+"properties": {
+"type": { "enum": ["progress-log", "csv", "pdf", "json", "evidence"
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+23/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+"uri": { "type": "string", "format": "uri" },
+"contentType": { "type": "string" },
+"description": { "type": "string" }
+}
+}
+}
+}
+},
+"progress_policy": {
+"heartbeatSeconds": 10
+},
+"primitiveDependencies": [
+// Maps to user input primitives
+"elicitations": [
+{
+"id": "gather_missing_policy"
+},
+{
+"id": "approve_remediation"
+}
+],
+// Maps to delegated task primitives (sampling)
+"delegations": [
+{
+"id": "llm_pii_classifier"
+},
+{
+"id": "voice_redaction_suggester"
+},
+{
+"id": "legal_phrase_ner"
+}
+]
+// can add additional task primitives here for nesting
+],
+"security": {
+"riskClass": "high",
+"allowedDomains": [
+"meetings.webex.com",
+"api.ciscospark.com"
+],
+"auth": {
+"type": "jwt",
+"scopes": [
+"compliance:read",
+"compliance:write",
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+24/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+"meetings:read",
+"contact_center:read",
+"admin:read"
+]
+},
+"rateLimitMax" : {
+"invocationCount": 100,
+"timeUnitCount": 60,
+"timeUnit": "seconds",
+"concurrentInvocations": 5
+}
+},
+"exposure": {
+"mcp": {
+"tool": {
+"enabled": true,
+"name": "cdcsr_sweep"
+}
+},
+"a2a": {
+"skill": {
+"enabled": true,
+"id": "agent://webex/compliance/cdcsr"
+}
+}
+},
+"runtime": {
+"mode": "plugin",
+"language": "python",
+"entrypoint": "cdcsr_sweep.py",
+"resources": {
+"cpu": 1,
+"memory": "1G"
+}
+}
+}
+
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+25/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+1.6.1.1.3 MCP tool spec for sample task
+{
+"name": "cdcsr_sweep",
+"title": "Cross-Domain Compliance Sweep & Remediation",
+"description": "Search Meetings/Contact Center/Admin for compliance violations, score
+"annotations": {
+"title": "Cross-Domain Compliance Sweep & Remediation",
+// the various hints might need to be mapped in the common spec schema.
+"readOnlyHint": false,
+"destructiveHint": true,
+"idempotentHint": false,
+"openWorldHint": false
+},
+"inputSchema": {
+"$schema": "https://json-schema.org/draft/2020-12/schema",
+"type": "object",
+"additionalProperties": false,
+"required": ["tenantId", "query", "dateRange"],
+"properties": {
+"tenantId": { "type": "string", "description": "Webex CI orgID" },
+"query": { "type": "string", "description": "Search query (KQL-like or natural la
+"dateRange": {
+"type": "object",
+"required": ["from", "to"],
+"properties": {
+"from": { "type": "string", "format": "date-time" },
+"to": { "type": "string", "format": "date-time" }
+}
+},
+"domains": {
+"type": "array",
+"items": { "enum": ["meetings", "contact_center", "calling", "messaging", "adm
+"default": ["meetings", "contact_center", "admin"]
+},
+"severityThreshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0
+"actions": {
+"type": "object",
+"properties": {
+"redact": { "type": "boolean", "default": false },
+"quarantine": { "type": "boolean", "default": false },
+"notifyEmails": {
+"type": "array",
+"items": { "type": "string", "format": "email" },
+"default": []
+}
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+26/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+}
+},
+"legalHoldPolicyId": { "type": "string", "nullable": true }
+}
+},
+"outputSchema": {
+"$schema": "https://json-schema.org/draft/2020-12/schema",
+"type": "object",
+"required": ["taskId", "status", "summary"],
+"properties": {
+"taskId": { "type": "string" },
+"status": { "enum": ["completed", "failed", "cancelled"] },
+"summary": {
+"type": "object",
+"properties": {
+"totalItems": { "type": "integer" },
+"flaggedItems": { "type": "integer" },
+"byDomain": {
+"type": "object",
+"properties": {
+"meetings": { "type": "integer" },
+"contact_center": { "type": "integer" },
+"admin": { "type": "integer" }
+}
+},
+"remediation": {
+"type": "object",
+"properties": {
+"redacted": { "type": "integer" },
+"quarantined": { "type": "integer" }
+}
+},
+"reportUri": { "type": "string", "format": "uri" }
+}
+}
+}
+}
+}
+
+1.6.1.1.4 A2A agent card for sample task
+The A2A agent card with the skill corresponding to the task is given below.
+
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+27/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+{
+"protocolVersion": "0.3.0",
+"name": "Webex Compliance Agent",
+"description": "Performs cross-domain compliance sweeps across Meetings, Contact Cent
+"url": "https://a2a.webex.com/compliance/v1",
+"preferredTransport": "JSONRPC",
+"additionalInterfaces": [
+{
+"url": "https://a2a.webex.com/compliance/v1",
+"transport": "JSONRPC"
+}
+],
+"provider": {
+"organization": "Webex",
+"url": "https://webex.com"
+},
+"version": "1.0.1",
+// A2Acapabilities are at the agent level, not at the skill level
+"capabilities": {},
+"securitySchemes": {
+"bearer-jwt": {
+"type": "http",
+"scheme": "bearer",
+"bearerFormat": "JWT"
+}
+},
+"security": [
+{
+"bearer-jwt": []
+}
+],
+"defaultInputModes": ["application/json", "text/plain"],
+"defaultOutputModes": ["application/json", "application/pdf", "text/csv", "text/plain
+"skills": [
+{
+"id": "agent://webex/compliance/cdcsr",
+"name": "Cross-Domain Compliance Sweep & Remediation",
+"description": "Search Meetings/Contact Center/Admin for compliance violations, s
+"tags": ["compliance", "pii", "redaction", "reporting", "admin"],
+"examples": [
+"Run a compliance sweep for tenant ABC over the last 30 days for PII and restri
+"{\"tenantId\":\"<orgId>\",\"query\":\"PII OR restricted phrase\",\"dateRange\"
+],
+"inputModes": ["application/json", "text/plain"],
+"outputModes": ["application/json", "application/pdf", "text/csv", "text/plain"]
+"security": [
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+28/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+{
+"bearer-jwt": [
+"compliance:read",
+"compliance:write",
+"meetings:read",
+"contact_center:read",
+"admin:read"
+]
+}
+]
+}
+]
+}
+
+1.6.1.1.5 Sample sequence diagrams
+These are illustrative flows. They might not have every step in the sample use-case flow, but they
+capture key interactions (elicitation, sampling etc.).
+1. MCP tool invocation:
+
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+29/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+MCP Protocol Stack
+(PPP client)
+
+MCP Client
+
+Plugin Gateway
+(PPP server)
+
+Language Runtime Service
+(Runtime Supervisor)
+
+Plugin Worker
+(PPP server inside worker)
+
+MCP initialize/initialized over Streamable HTTP (unchanged)
+POST /mcp initialize (id:1)
+1
+
+initialize response + Mcp-Session-Id
+2
+
+POST /mcp notifications/initialized
+3
+
+202
+4
+
+Server opens a long-lived PPP session to the Gateway
+gRPC ToolPlugin.Session (bidi) open
+5
+
+PPP ClientMessage.init{ ctx:{tenant,user,wcit,session}, env:{} }
+6
+
+PPP ServerMessage.init{ ok:true, caps:{} }
+7
+
+Server opens SSE for the request
+POST /mcp tools/call (id:2) + progressToken
+8
+
+200 text/event-stream (SSE bound to id:2)
+9
+
+PPP ClientMessage.invoke{ctx, primitive:"cdcsr",
+version:"1.0.1", arguments: JSON,
+request_id:"2" }
+10
+
+Gateway internal, S sees only PPP events
+AllocateWorker(plugin, ctx, hints, deadline, fresh?)
+11
+
+alt
+
+[admission queued]
+{admission:QUEUED, handle:t-789, queue:{pos,depth,eta}}
+12
+
+PPP ServerMessage.status{
+request_id:"2", task_id:"T1",
+status:WORKING, phase:"ADMISSION.QUEUED",
+metadata:{pos,depth,eta}}
+13
+
+PPP ServerMessage.progress{
+request_id:"2", task_id:"T1",
+percent:0.0, message:"Queued…"}
+14
+
+ProxyPpp(stream, tunnel_id:t-789)
+15
+
+TunnelEvent ALLOCATION_STARTED
+16
+
+PPP ServerMessage.status{
+request_id:"2", task_id:"T1",
+status:WORKING, phase:"ADMISSION.STARTED"}
+17
+
+[admitted immediately]
+{admission:ADMITTED, handle:t-789}
+18
+
+ProxyPpp(stream, tunnel_id:t-789)
+19
+
+TunnelEvent TUNNEL_READY (t-789)
+20
+
+Gateway binds tunnel t-789 to worker PPP
+ToolPlugin.Session (bidi) connect
+21
+
+PPP ClientMessage.init{ctx} (first hop)
+22
+
+PPP ServerMessage.init{ok:true}
+23
+
+PppClientFrame{tunnel_id:t-789, ppp:Client.invoke{…}}
+24
+
+PPP ClientMessage.invoke{…}
+25
+
+PPP ServerMessage.progress{request_id:"2", task_id:"T1", percent:18, message:"Indexing…"}
+26
+
+PppServerFrame{ppp:progress}
+27
+
+PPP ServerMessage.progress{…}
+28
+
+SSE notifications/progress{progressToken, progress:18, total:100, message:"Indexing…"}
+29
+
+PPP ServerMessage.elicitation{request_id:"2", task_id:"T1", elicitation_id:"gather_missing_policy", fields:[…]}
+30
+
+PppServerFrame{ppp:elicitation}
+31
+
+PPP ServerMessage.elicitation{…}
+32
+
+SSE JSON-RPC Request (elicitation/create) id:2001
+33
+
+POST JSON-RPC Response id:2001 {action:"accept", content:{legalHoldPolicyId:"LHP-42"}}
+34
+
+202
+35
+
+PPP ClientMessage.user_input{<request_id:"2", task_id:"T1",
+elicitation_id:"gather_missing_policy",
+fields: JSON({legalHoldPolicyId:"LHP-42"}) }
+36
+
+PppClientFrame{ppp:Client.user_input}
+37
+
+PPP ClientMessage.user_input{…}
+38
+
+PPP ServerMessage.delegation{request_id:"2", task_id:"T1", correlation_id:"D-9", delegate_id:"llm_pii_classifier", input:JSON, timeout:"PT30S"}
+39
+
+PppServerFrame{ppp:delegation}
+40
+
+PPP ServerMessage.delegation{…}
+41
+
+SSE JSON-RPC Request (sampling/createMessage) id:2002
+42
+
+POST JSON-RPC Response id:2002 {role:"assistant", content:{text:"PII score 0.87…"}}
+43
+
+202
+44
+
+PPP ClientMessage.delegation_result{
+request_id:"2", task_id:"T1",
+correlation_id:"D-9", result:JSON({score:0.87,label:"high"}) }
+45
+
+PppClientFrame{ppp:Client.delegation_result}
+46
+
+PPP ClientMessage.delegation_result{…}
+47
+
+PPP ServerMessage.progress{request_id:"2", percent:62, message:"Scanning…"}
+48
+
+PppServerFrame{ppp:progress}
+49
+
+PPP ServerMessage.progress{…}
+50
+
+SSE notifications/progress{…}
+51
+
+PPP ServerMessage.artifact{type:"progress-log", uri:"report://T1/log"}
+52
+
+PppServerFrame{ppp:artifact}
+53
+
+PPP ServerMessage.artifact{…}
+54
+
+PPP ServerMessage.completed{
+request_id:"2", task_id:"T1",
+output:JSON({taskId:"T1", status:"completed", summary:{…}, artifacts:[…]}) }
+55
+
+PppServerFrame{ppp:completed}
+56
+
+PPP ServerMessage.completed{…}
+57
+
+Validate outputSchema, commit idempotency
+SSE JSON-RPC Response id:2 {result:{content:[…], structuredContent:{…}, isError:false}}
+58
+
+Gateway closes tunnel, internal cleanup
+CloseTunnel(t-789)
+59
+
+CloseTunnelResponse{stats:{…}}
+60
+
+alt
+
+[Client cancels while tunnel NOT ready]
+POST notifications/cancelled{requestId:2}
+
+61
+
+202
+62
+
+PPP ClientMessage.cancel{request_id:"2", reason:"user_cancel"}
+63
+
+Intercept pre-ready → call R.CancelAllocation/CloseTunnel
+SSE JSON-RPC Response id:2 error{-32000,"Request cancelled"}
+64
+
+[Client cancels after readiness]
+POST notifications/cancelled{requestId:2}
+65
+
+202
+66
+
+PPP ClientMessage.cancel{request_id:"2", reason:"user_cancel"}
+67
+
+PppClientFrame{ppp:Client.cancel}
+68
+
+PPP ClientMessage.cancel
+69
+
+PPP ServerMessage.cancel{accepted:true}
+70
+
+PppServerFrame{ppp:cancel}
+71
+
+PPP ServerMessage.failed{code:"CANCELLED", message:"Cancelled by user"}
+72
+
+PppServerFrame{ppp:failed}
+73
+
+PPP ServerMessage.failed{…}
+74
+
+CloseTunnel(t-789)
+75
+
+SSE JSON-RPC Response id:2 error{-32000,"Request cancelled"}
+
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+30/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+p
+
+{
+
+,
+
+q
+
+}
+76
+
+MCP Client
+
+MCP Protocol Stack
+(PPP client)
+
+Plugin Gateway
+(PPP server)
+
+Language Runtime Service
+(Runtime Supervisor)
+
+Plugin Worker
+(PPP server inside worker)
+
+2. A2A tool invocation:
+
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+31/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+A2A Protocol Stack
+(JSON-RPC 2.0 + SSE)
+
+A2A Client
+
+Plugin Gateway
+(PPP server)
+
+Language Runtime Service (Python)
+(Runtime Supervisor)
+
+Plugin Worker
+(PPP server inside worker)
+
+Client Webhook
+(for push notifications)
+
+Agent discovery per A2A §5 (card) and §7.10 (authenticated card)
+GET /.well-known/agent-card.json
+1
+
+200 AgentCard{protocolVersion:"0.3.0",
+preferredTransport:"JSONRPC",
+capabilities:{streaming:true,pushNotifications:true}}
+2
+
+POST agent/getAuthenticatedExtendedCard
+{"jsonrpc":"2.0","id":1,"method":"agent/getAuthenticatedExtendedCard"}
+3
+
+{"jsonrpc":"2.0","id":1,"result":AgentCard}
+4
+
+Open long-lived PPP session to gateway (internal)
+gRPC ToolPlugin.Session (bidi) OPEN
+5
+
+PPP ClientMessage.init{ctx:{tenant,user,wcit,contextId}, env:{}}
+6
+
+PPP ServerMessage.init{ok:true, caps:{}}
+7
+
+Streaming interaction (A2A §7.2). Authorization via HTTP header (A2A §4).
+POST message/stream (JSON-RPC) id:2
+Headers: Authorization: Bearer …, Content-Type: application/json
+Params: MessageSendParams{
+message:{role:"user", parts:[{kind:"text", text:"Run compliance sweep"}], messageId:"m-001"},
+configuration:{acceptedOutputModes:["application/json"], historyLength:0}
+}
+8
+
+200 OK, Content-Type: text/event-stream
+(each SSE data = JSON-RPC response per §7.2.1)
+9
+
+Allocate worker + establish tunnel (internal PPP)
+PPP ClientMessage.invoke
+{ctx, primitive:"agent://webex/compliance/cdcsr",
+version:"1.0.1", arguments:Json(...), request_id:"2"}
+10
+
+AllocateWorker(pluginRef:{id:"cdcsr",version:"1.0.1",language:"python"}, ctx, hints, soft_deadline, force_fresh?)
+11
+
+alt
+
+[admission queued]
+AllocateWorkerResponse{admission:QUEUED, handle:{tunnel_id:"t-789"}, queue:{pos,depth,eta}}
+12
+
+PPP ServerMessage.status
+{request_id:"2", task_id:"T1", status:WORKING,
+phase:"ADMISSION.QUEUED", metadata:{pos,depth,eta}}
+13
+
+SSE data → {"jsonrpc":"2.0","id":2,"result":{
+"kind":"status-update","taskId":"T1","contextId":"C1",
+"status":{"state":"submitted","timestamp":"…"}, "final":false}}
+14
+
+ProxyPpp(stream, tunnel_id:"t-789")
+15
+
+TunnelEvent ALLOCATION_STARTED
+16
+
+PPP ServerMessage.status
+{request_id:"2", task_id:"T1",
+status:WORKING, phase:"ADMISSION.STARTED"}
+17
+
+[admitted immediately]
+AllocateWorkerResponse{admission:ADMITTED, handle:{tunnel_id:"t-789"}}
+18
+
+ProxyPpp(stream, tunnel_id:"t-789")
+19
+
+TunnelEvent TUNNEL_READY
+20
+
+ToolPlugin.Session (bidi) CONNECT
+21
+
+PPP ClientMessage.init{ctx}
+22
+
+PPP ServerMessage.init{ok:true}
+23
+
+PppClientFrame{tunnel_id:"t-789", ppp:Client.invoke{…}}
+24
+
+PPP ClientMessage.invoke{…}
+25
+
+PPP ServerMessage.status{request_id:"2", task_id:"T1", status:WORKING, phase:"INDEXING"}
+26
+
+PppServerFrame{ppp:status}
+27
+
+PPP ServerMessage.status{…}
+28
+
+SSE data → {"jsonrpc":"2.0","id":2,"result":{
+"kind":"status-update","taskId":"T1","contextId":"C1",
+"status":{"state":"working",
+"message":{"role":"agent","parts":[{"kind":"data","data":{"phase":"INDEXING","progressPct":18}}]},
+"timestamp":"…" }, "final":false}}
+29
+
+PPP ServerMessage.artifact{request_id:"2", task_id:"T1", type:"progress-log", uri:"report://T1/log"}
+30
+
+PppServerFrame{ppp:artifact}
+31
+
+PPP ServerMessage.artifact{…}
+32
+
+SSE data → {"jsonrpc":"2.0","id":2,"result":{
+"kind":"artifact-update","taskId":"T1","contextId":"C1",
+"artifact":{"artifactId":"log-1","parts":[{"kind":"file","file":{"uri":"report://T1/log"}}]},
+"append":false,"lastChunk":false}}
+33
+
+PPP ServerMessage.elicitation
+{request_id:"2", task_id:"T1", elicitation_id:"approve_remediation",
+fields:[{name:"approveRedaction",type:"boolean",required:true}]}
+34
+
+PppServerFrame{ppp:elicitation}
+35
+
+PPP ServerMessage.elicitation{…}
+36
+
+SSE data → {"jsonrpc":"2.0","id":2,"result":{
+"kind":"status-update","taskId":"T1","contextId":"C1",
+"status":{"state":"input-required",
+"message":{"role":"agent","parts":[{"kind":"data","data":
+{"elicitation_id":"approve_remediation","fields":[{"name":"approveRedaction","type":"boolean","required":true}]}}]},
+"timestamp":"…"}, "final":false}}
+37
+
+POST message/send (JSON-RPC) id:3
+{"params":{"message":{
+"role":"user","parts":[{"kind":"data","data":{"approveRedaction":true}}],
+"taskId":"T1","contextId":"C1","messageId":"m-002"},
+"configuration":{"historyLength":2}}}
+38
+
+{"jsonrpc":"2.0","id":3,"result":{ "id":"T1","contextId":"C1","status":{"state":"working"},"kind":"task" }}
+39
+
+PPP ClientMessage.user_input
+{request_id:"2", task_id:"T1", elicitation_id:"approve_remediation",
+fields:Json({"approveRedaction":true})}
+40
+
+PppClientFrame{ppp:Client.user_input}
+41
+
+PPP ClientMessage.user_input{…}
+42
+
+PPP ServerMessage.delegation
+{request_id:"2", task_id:"T1", correlation_id:"D-9", delegate_id:"llm_pii_classifier",
+input:Json({...}), timeout:"PT30S"}
+43
+
+Delegation handled within server, no A2A wire method is required
+PPP ServerMessage.status{status:WORKING, phase:"SCANNING"}
+44
+
+PppServerFrame{ppp:status}
+45
+
+PPP ServerMessage.status{…}
+46
+
+SSE data → {"jsonrpc":"2.0","id":2,"result":{"kind":"status-update","taskId":"T1","contextId":"C1","status":{"state":"working",
+"message":{"role":"agent","parts":[{"kind":"data","data":{"phase":"SCANNING","progressPct":62}}]}},"final":false}}
+47
+
+PPP ServerMessage.artifact{type:"csv", uri:"s3://…/findings.csv", description:"Findings"}
+48
+
+PppServerFrame{ppp:artifact}
+49
+
+PPP ServerMessage.artifact{…}
+50
+
+SSE data → {"jsonrpc":"2.0","id":2,"result":{"kind":"artifact-update","taskId":"T1","contextId":"C1","artifact":{"artifactId":"csv-1",
+"parts":[{"kind":"file","file":
+{"uri":"s3://…/findings.csv","mimeType":"text/csv","name":"findings.csv"}}]},"append":false,"lastChunk":true}}
+51
+
+PPP ServerMessage.completed
+{request_id:"2", task_id:"T1", output:Json({"summary":{"totalItems":120,
+"flaggedItems":19,"reportUri":"https://…/report.pdf"}})}
+52
+
+PppServerFrame{ppp:completed}
+53
+
+PPP ServerMessage.completed{…}
+54
+
+SSE data → {"jsonrpc":"2.0","id":2,"result":{
+"kind":"status-update","taskId":"T1","contextId":"C1",
+"status":{"state":"completed","timestamp":"…"}, "final":true}}
+55
+
+Output validated (per agent/card modes) and committed
+CloseTunnel{tunnel_id:"t-789", reason:"complete"}
+56
+
+CloseTunnelResponse{stats:{cpu_ms,rss_max,bytes_in,bytes_out,duration_ms}}
+57
+
+alt
+
+[Client cancels (A2A §7.4)]
+POST tasks/cancel (JSON-RPC) id:4 {"params":{"id":"T1"}}
+
+58
+
+PPP ClientMessage.cancel{request_id:"2", reason:"user_cancel"}
+59
+
+PppClientFrame{ppp:Client.cancel}
+60
+
+PPP ClientMessage.cancel
+61
+
+PPP ServerMessage.cancel{accepted:true}
+62
+
+PppServerFrame{ppp:cancel}
+63
+
+PPP ServerMessage.failed{code:"CANCELLED", message:"Cancelled by user"}
+64
+
+PppServerFrame{ppp:failed}
+65
+
+PPP ServerMessage.failed{…}
+66
+
+{"jsonrpc":"2.0","id":4,"result":{"id":"T1","contextId":"C1","status":{"state":"canceled"},"kind":"task"}}
+67
+
+SSE data →
+{"jsonrpc":"2.0","id":2,"result":{"kind":"status-update","taskId":"T1","contextId":"C1","status":{"state":"canceled"},"final":true}}
+68
+
+CloseTunnel{tunnel_id:"t-789", reason:"cancelled"}
+69
+
+alt
+
+[SSE disconnects, client resumes (A2A 7.9)]
+SSE connection lost
+
+70
+
+POST tasks/resubscribe (JSON-RPC) id:5 {"params":{"id":"T1"}}
+71
+
+200 OK text/event-stream (subsequent events only)
+72
+
+alt
+
+[Configure webhook (A2A §7.5) and receive async completion]
+POST tasks/pushNotificationConfig/set id:6
+{"params":{"taskId":"T1","pushNotificationConfig":
+{"url":"https://client.example.com/webhook/a2a","token":"tok-aaa","authentication":{"schemes":["Bearer"]}}}}
+
+73
+
+{"jsonrpc":"2.0","id":6,"result":{"taskId":"T1","pushNotificationConfig":
+{"url":"https://client.example.com/webhook/a2a","token":"tok-aaa"}}}
+74
+
+POST (Push Notification) Headers: X-A2A-Notification-Token: tok-aaa
+Body: Task{"id":"T1","contextId":"C1","status":{"state":"completed"},"kind":"task"}
+75
+
+A2A Client
+
+A2A Protocol Stack
+(JSON-RPC 2.0 + SSE)
+
+Plugin Gateway
+(PPP server)
+
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+Language Runtime Service (Python)
+(Runtime Supervisor)
+
+Plugin Worker
+(PPP server inside worker)
+
+Client Webhook
+(for push notifications)
+
+32/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+3. One MCP//A2A flow with proxy plugin pattern
+TODO: Flesh this out based on the REST API to remote service URLs.
+
+1.6.2 Compiled artifacts
+Generated MCP specs, A2A agent card in future
+Runtime manifest used by plugin manager
+language, limits, entrypoint etc.
+Compile plugin code package (jar/whl/npm tgz)
+
+1.6.3 Schema validation logic
+Upon PR submission, YAML/JSON linted via CI tooling
+Schema ingestion after PR approval
+Schema validation
+Compile to MCP spec and runtime plugin spec
+
+1.6.4 Platform-Plugin Protocol
+Independent of MCP/A2A
+gRPC
+HTTP/JSON fallback for simple proxying
+Proto definition
+
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+33/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+syntax = "proto3";
+package webex.mcp.ppp.v1;
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+/*
+Platform <-> Plugin Protocol (PPP), bidi streaming.
+Design principles:
+- request_id: maps to upper-layer (e.g., MCP tool call id / JSON-RPC id).
+- task_id: plugin-assigned identifier for long-running work (stable across retries)
+- Plugin owns internal FSM. Wire exposes only minimal lifecycle + optional opaque p
+- Json carries canonical JSON bytes when schema'd payloads are needed.
+*/
+// ----------------------- Shared Types ----------------------message Context {
+string tenant_id = 1;
+string user_id = 2;
+string wcit_hash = 3;
+
+// or wcit id
+
+string session_id = 4;
+string correlation_id = 5;
+}
+message Json {
+bytes value = 1; // canonical JSON (UTF-8)
+}
+// Optional: per-session initialization
+message InitRequest {
+Context ctx = 1;
+map<string,string> env = 2; // plugin-configured env
+}
+message InitResponse {
+bool ok = 1;
+string message = 2;
+// Optional: plugin capability hints
+map<string, string> caps = 3;
+}
+
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+34/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+// Start a unit of work.
+message InvokeRequest {
+Context ctx = 1;
+string primitive = 2;
+
+// e.g., "cc.compliance.search"
+
+string version = 3;
+
+// common definition / primitive version
+
+Json arguments = 4;
+
+// MUST validate against inputSchema
+
+string request_id = 5;
+
+// maps to JSON-RPC id for cancellation
+
+string task_id = 6;
+
+// OPTIONAL: plugin may return/echo a stable id
+
+map<string, string> attrs = 7; // free-form attributes (trace, route, etc.)
+}
+// Cancellation by upper layers (best-effort).
+message CancelRequest {
+string request_id = 1;
+string reason = 2;
+}
+// Ack to CancelRequest.
+message CancelResponse {
+string request_id = 1;
+bool accepted = 2;
+string message = 3;
+}
+// Periodic progress.
+message Progress {
+string request_id = 1;
+string task_id = 2;
+double percent = 3;
+
+// 0..100
+
+string message = 4;
+google.protobuf.Timestamp at = 5;
+map<string, double> gauges = 6; // domain counters (e.g., scanned_meetings)
+}
+// Optional incremental payloads (structured/unstructured).
+message ResultChunk {
+string request_id = 1;
+string task_id = 2;
+bool is_error = 3;
+Json structured = 4;
+
+// if outputSchema part is available
+
+string text = 5;
+
+// unstructured content (e.g., streaming text)
+
+}
+// Final successful completion with structured output.
+message Completed {
+string request_id = 1;
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+35/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+string task_id = 2;
+Json output = 3;
+
+// must satisfy outputSchema
+
+}
+// Final failure.
+message Failed {
+string request_id = 1;
+string task_id = 2;
+string code = 3;
+
+// machine-readable
+
+string message = 4;
+
+// human-readable
+
+Json details = 5;
+
+// extra context
+
+}
+// Optional out-of-band artifact references (files, URIs, evidence).
+message ArtifactEmitted {
+string request_id = 1;
+string task_id = 2;
+string type = 3;
+
+// "csv","pdf","progress-log","evidence"
+
+string uri = 4;
+
+// e.g., "report://{taskId}/summary.pdf"
+
+string content_type = 5;
+string description = 6;
+}
+// Minimal lifecycle (plugin owns FSM). 'phase' is opaque, for observability only.
+message StatusUpdated {
+enum Status {
+STATUS_UNSPECIFIED = 0;
+WORKING = 1;
+INPUT_REQUIRED = 2;
+CANCELLED = 3;
+
+// terminal from the plugin's POV
+
+}
+string request_id = 1;
+string task_id = 2;
+Status status = 3;
+string phase = 4;
+
+// plugin-defined phase string
+
+Json metadata = 5;
+
+// optional extra context
+
+}
+// Elicitation round-trip (user input collection).
+message ElicitationRequested {
+string request_id = 1;
+string task_id = 2;
+string elicitation_id = 3; // e.g., "approve_remediation"
+string title = 4;
+repeated ElicitationField fields = 5;
+}
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+36/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+message ElicitationField {
+string name = 1;
+string type = 2;
+
+// "string","boolean","number"
+
+bool required = 3;
+string label = 4;
+}
+message DeliverUserInput {
+string request_id = 1;
+string task_id = 2;
+string elicitation_id = 3;
+Json fields = 4;
+
+// JSON object with user answers
+
+}
+// Delegation round-trip (nested tasks / sampling).
+message DelegationRequested {
+string request_id = 1;
+string task_id = 2;
+string correlation_id = 3;
+
+// returned in DeliverDelegationResult
+
+string delegate_id = 4;
+
+// e.g., "llm_pii_classifier"
+
+Json input = 5;
+
+// JSON object for the delegate
+
+google.protobuf.Duration timeout = 6;
+}
+message DeliverDelegationResult {
+string request_id = 1;
+string task_id = 2;
+string correlation_id = 3;
+Json result = 4;
+
+// JSON object result from delegate
+
+string error = 5;
+
+// optional
+
+}
+// Logging
+message LogLine {
+enum Level { TRACE = 0; DEBUG = 1; INFO = 2; WARN = 3; ERROR = 4; }
+string request_id = 1;
+string task_id = 2;
+Level level = 3;
+string message = 4;
+google.protobuf.Timestamp at = 5;
+}
+// Keep-alive
+message Ping {
+string nonce = 1;
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+37/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+}
+message Pong {
+string nonce = 1;
+}
+// ----------------------- Bidi Stream Envelopes ----------------------message ClientMessage {
+// Every message flowing from Platform -> Plugin
+oneof payload {
+InitRequest init = 1;
+InvokeRequest invoke = 2;
+CancelRequest cancel = 3;
+DeliverUserInput user_input = 4;
+DeliverDelegationResult delegation_result = 5;
+Ping ping = 6;
+}
+}
+message ServerMessage {
+// Every message flowing from Plugin -> Platform
+oneof payload {
+InitResponse init = 1;
+StatusUpdated status = 2;
+Progress progress = 3;
+ResultChunk chunk = 4;
+ArtifactEmitted artifact = 5;
+ElicitationRequested elicitation = 6;
+DelegationRequested delegation = 7;
+LogLine log = 8;
+Completed completed = 9;
+Failed failed = 10;
+CancelResponse cancel = 11;
+Pong pong = 12;
+}
+}
+// ----------------------- Service ----------------------service ToolPlugin {
+// Single bidi session per plugin instance (or per task scheduler).
+rpc Session(stream ClientMessage) returns (stream ServerMessage);
+// Optional health endpoint for simple liveness probes.
+rpc Health(google.protobuf.Empty) returns (InitResponse);
+}
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+38/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+ResourcePlugin
+List, Read(uri) -> stream ContentChunk, optional Subscribe(uri) -> stream Updated
+PromptPlugin: List, Get(name, args) -> messages[]
+Cancellation & progress
+PPP maps cleanly to MCP notifications/progress and notifications/cancelled when the
+MCP side talks to clients. The plugin stream lets us propagate progress messages
+without coupling to MCP wire semantics The Java SDK supports progress and
+cancellation handling on the server side.
+HTTP/JSON fallback protocol
+Follow the model used by MCP SEP-1597
+Security
+Server TLS with access token between Plugin Gateway and plugin process/pod.
+mTLS optional
+
+1.6.5 Control Plane APIs
+TODO: Flesh out. These are just illustrative - in actual implementation, CH might store settings in
+Settings service (or Config service in CC), and the server platform would read from there.
+
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+39/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+POST /api/registry/validate
+body: { YAML/JSON }
+200: { valid: boolean, errors: [ ... ] }
+POST /api/registry/compile
+body: { YAML/JSON }
+200: { mcp: { tools: [...], prompts: [...], resources: [...] }, runtimeManifest: {..
+GET /api/registry/orgs/{orgId}/primitives
+200: [ { name, version, exposure, policy, ... } ]
+PUT /api/policy/orgs/{orgId}/exposure
+body: {
+server: "cc" | "meetings" | "admin",
+protocol: "mcp" | "a2a",
+enabled: boolean
+}
+PUT /api/policy/orgs/{orgId}/bindings
+body: {
+target: { type: "user"|"wcit"|"group", idOrPattern: "*"|"123"... },
+primitive: { name: "cc.compliance.search", protocol: "mcp" },
+allowed: boolean
+}
+PUT /api/ratelimits/orgs/{orgId}
+body:
+- selector: { server: "*", primitive: "*", user: "*", wcit: "*" }
+policy:
+
+{ type: "token-bucket", capacity: 1000, refill: "100/s" }
+
+- selector: { primitive: "cc.compliance.search", user: "*", wcit: "*" }
+policy:
+
+{ capacity: 20, refill: "1/s" }
+
+1.6.6 Metrics and Audit
+Every tool/resource/prompt call emits start/finish events
+(tenant, user/wcit, primitive, server, protocol, latency, outcome, bytes_in/out, rateLimit.hit,
+cache.hit)
+errors include normalized reason/exception class.
+Java SDK has logging capability, we map that to server metrics
+
+1.6.7 Data stores
+Postgres (could be Settings or some other service too)
+primitive registry state
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+40/41
+
+17/10/2025, 13:19
+
+Agentic Server Platform Architecture Notes
+
+compiled artifacts
+policy tables (Settings?)
+rate‑limit configs (not counters)
+Redis:
+session snapshots
+SSE outboxes
+idempotency ledger
+progress indication tokens
+rate counters
+server CI tokens
+
+https://sqbu-github.cisco.com/pages/fsiyavud/mcp-proxy/agentic_server_platform.html
+
+41/41
+
+

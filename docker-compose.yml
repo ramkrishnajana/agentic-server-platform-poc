@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  # Plugin Gateway - Entry point for all requests
+  plugin-gateway:
+    build:
+      context: .
+      dockerfile: plugin-gateway/Dockerfile
+    container_name: plugin-gateway
+    ports:
+      - "8080:8080"
+    networks:
+      - agentic-network
+    depends_on:
+      - java-runtime-supervisor
+      - python-runtime-supervisor
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+
+  # Java Runtime Supervisor - Manages Java plugin workers
+  java-runtime-supervisor:
+    build:
+      context: .
+      dockerfile: java-runtime-supervisor/Dockerfile
+    container_name: java-runtime-supervisor
+    ports:
+      - "9091:9091"
+      - "10000-10100:10000-10100"  # Port range for Java workers
+    networks:
+      - agentic-network
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Access to Docker daemon
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+
+  # Python Runtime Supervisor - Manages Python plugin workers
+  python-runtime-supervisor:
+    build:
+      context: .
+      dockerfile: python-runtime-supervisor/Dockerfile
+    container_name: python-runtime-supervisor
+    ports:
+      - "9092:9092"
+      - "20000-20100:20000-20100"  # Port range for Python workers
+    networks:
+      - agentic-network
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Access to Docker daemon
+
+networks:
+  agentic-network:
+    driver: bridge
+
