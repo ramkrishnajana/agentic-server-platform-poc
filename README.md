@@ -264,6 +264,17 @@ docker ps | grep worker
 
 You should see containers like `worker-10001`, `worker-10002`, etc.
 
+## API Reference
+
+📖 **Complete API documentation** for all 4 calculation operations is available in [`API-REFERENCE.md`](API-REFERENCE.md):
+
+- Quick reference table for all endpoints
+- Request/Response schemas
+- Error handling examples
+- Performance characteristics
+- Usage scenarios
+- Plugin registration details
+
 ## Detailed Sequence Diagrams
 
 📊 **Complete UML diagrams** showing the entire request flow are available in the [`docs/`](docs/) directory:
