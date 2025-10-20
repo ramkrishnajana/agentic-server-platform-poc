@@ -8,15 +8,17 @@ import com.webex.agentic.common.model.CalculationRequest;
 import com.webex.agentic.common.model.CalculationResult;
 import com.webex.agentic.proto.ppp.*;
 import io.grpc.stub.StreamObserver;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import net.devh.boot.grpc.server.service.GrpcService;
 
 /**
  * Multiply plugin - implements Platform-Plugin Protocol (PPP)
  */
-@Slf4j
 @GrpcService
 public class MultiplyPluginService extends ToolPluginGrpc.ToolPluginImplBase {
+    
+    private static final Logger log = LoggerFactory.getLogger(MultiplyPluginService.class);
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 

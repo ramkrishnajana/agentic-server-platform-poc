@@ -1,7 +1,7 @@
 package com.webex.agentic.runtime.java.service;
 
-import lombok.Data;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -12,9 +12,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Manages worker container lifecycle
  */
-@Slf4j
 @Service
 public class WorkerManager {
+    
+    private static final Logger log = LoggerFactory.getLogger(WorkerManager.class);
 
     private final Map<String, WorkerProcess> workers = new ConcurrentHashMap<>();
     private final AtomicInteger portCounter = new AtomicInteger(10000);
@@ -32,8 +33,7 @@ public class WorkerManager {
         ProcessBuilder pb = new ProcessBuilder(
             "docker", "run",
             "--name", containerName,
-            "--network", "agentic-network",
-            "-p", port + ":8080",
+            "--network", "agentic-server-platform-poc_agentic-network",
             "-e", "WORKER_ID=" + workerId,
             "-e", "PLUGIN_ID=" + pluginId,
             "-d",  // detached mode
@@ -80,13 +80,40 @@ public class WorkerManager {
         };
     }
 
-    @Data
     public static class WorkerProcess {
         private final String workerId;
         private final String pluginId;
         private final int port;
         private final Process process;
         private final String containerName;
+        
+        public WorkerProcess(String workerId, String pluginId, int port, Process process, String containerName) {
+            this.workerId = workerId;
+            this.pluginId = pluginId;
+            this.port = port;
+            this.process = process;
+            this.containerName = containerName;
+        }
+        
+        public String getWorkerId() {
+            return workerId;
+        }
+        
+        public String getPluginId() {
+            return pluginId;
+        }
+        
+        public int getPort() {
+            return port;
+        }
+        
+        public Process getProcess() {
+            return process;
+        }
+        
+        public String getContainerName() {
+            return containerName;
+        }
     }
 }
 

@@ -33,11 +33,14 @@ This is a Proof of Concept implementation of the Agentic Server Platform demonst
 ## Technology Stack
 
 - **Spring Boot 3.2**: Plugin Gateway and Java Runtime Supervisor
-- **gRPC**: Inter-service communication (Runtime Supervisor API and Platform-Plugin Protocol)
-- **Protocol Buffers**: Message definitions
-- **Docker**: Containerization and isolation
-- **Maven**: Build tool for Java components
+- **gRPC 1.58.0**: Inter-service communication (Runtime Supervisor API and Platform-Plugin Protocol)
+- **Protocol Buffers 3.24.0**: Message definitions
+- **Docker**: Containerization and isolation (eclipse-temurin:17-jre base images)
+- **Maven 3.9**: Build tool for Java components
 - **Python 3.11**: Python Runtime Supervisor and Python plugins
+- **Java 17-25**: Compiled with Java 17 target, tested with Java 25
+
+**Note**: No Lombok - all code uses manual implementations for Java 25 compatibility.
 
 ## Plugins
 
@@ -47,30 +50,42 @@ This is a Proof of Concept implementation of the Agentic Server Platform demonst
 
 ## Prerequisites
 
-- Java 17 or higher
-- Maven 3.8+ (or use the included Maven wrapper)
-- Docker and Docker Compose
-- Python 3.11+ (for Python components)
+- **Java 17 or higher** (tested with Java 25)
+- **Maven 3.8+** (or use the included Maven wrapper)
+- **Docker and Docker Compose**
+- **Python 3.11+** (for Python components)
+
+⚠️ **Important**: This project does NOT use Lombok to ensure compatibility with Java 17-25. All getters, setters, and loggers are manually implemented.
 
 ## Build and Run
 
-### 1. Build Plugin Worker Images
+### 1. Build Maven Projects
 
-First, build the plugin worker images that will be dynamically spawned:
+First, compile all Java modules:
 
 ```bash
-chmod +x build-images.sh
-./build-images.sh
+./mvnw clean package -DskipTests
 ```
 
-This will:
-- Build all Maven projects
-- Create Docker images for the three plugin workers:
-  - `java-plugin-add:latest`
-  - `java-plugin-multiply:latest`
-  - `python-plugin-subtract:latest`
+**Note**: The `clean` goal may fail due to protobuf plugin cleanup issues. If this happens, use:
+```bash
+./mvnw package -DskipTests
+```
 
-### 2. Start the Platform
+### 2. Build Plugin Worker Images
+
+Build the plugin worker Docker images:
+
+```bash
+# Build Java plugin workers
+docker build -t java-plugin-add:latest -f java-plugin-add/Dockerfile .
+docker build -t java-plugin-multiply:latest -f java-plugin-multiply/Dockerfile .
+
+# Build Python plugin worker
+docker build -t python-plugin-subtract:latest -f python-plugin-subtract/Dockerfile .
+```
+
+### 3. Start the Platform
 
 Start the Plugin Gateway and Runtime Supervisors:
 
@@ -78,15 +93,27 @@ Start the Plugin Gateway and Runtime Supervisors:
 docker-compose up -d
 ```
 
-This will start:
-- Plugin Gateway (http://localhost:8080)
-- Java Runtime Supervisor (gRPC port 9091)
-- Python Runtime Supervisor (gRPC port 9092)
+This will:
+- Build the platform service images (plugin-gateway, java-runtime-supervisor, python-runtime-supervisor)
+- Start all services:
+  - Plugin Gateway (http://localhost:8080)
+  - Java Runtime Supervisor (gRPC port 9091)
+  - Python Runtime Supervisor (gRPC port 9092)
 
-### 3. Check Status
+Wait 10-15 seconds for services to fully initialize.
+
+### 4. Verify Services
 
 ```bash
+# Check all services are running
 docker-compose ps
+
+# You should see 3 services:
+# - plugin-gateway (Up)
+# - java-runtime-supervisor (Up)
+# - python-runtime-supervisor (Up)
+
+# View logs
 docker-compose logs -f
 ```
 
@@ -308,8 +335,23 @@ sudo usermod -aG docker $USER
 
 ### Proto compilation errors
 ```bash
-# Rebuild with clean
-./mvnw clean install -DskipTests
+# If clean fails due to protobuf plugin cleanup, build without clean
+./mvnw package -DskipTests
+
+# Or manually clean target directories first
+rm -rf proto/target common/target plugin-gateway/target
+./mvnw package -DskipTests
+```
+
+### Services fail to start
+```bash
+# Check logs for specific service
+docker-compose logs plugin-gateway
+docker-compose logs java-runtime-supervisor
+docker-compose logs python-runtime-supervisor
+
+# Rebuild specific service
+docker-compose up -d --build plugin-gateway
 ```
 
 ## License

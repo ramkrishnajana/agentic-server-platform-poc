@@ -3,21 +3,25 @@ package com.webex.agentic.gateway.controller;
 import com.webex.agentic.common.model.CalculationRequest;
 import com.webex.agentic.common.model.CalculationResult;
 import com.webex.agentic.gateway.service.PluginExecutionService;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 /**
  * REST controller for calculation operations
  */
-@Slf4j
 @RestController
 @RequestMapping("/api/v1/calculate")
-@RequiredArgsConstructor
 public class CalculationController {
+    
+    private static final Logger log = LoggerFactory.getLogger(CalculationController.class);
 
     private final PluginExecutionService executionService;
+    
+    public CalculationController(PluginExecutionService executionService) {
+        this.executionService = executionService;
+    }
 
     @PostMapping("/add")
     public ResponseEntity<CalculationResult> add(@RequestBody CalculationRequest request) {

@@ -3,32 +3,45 @@
 ## Prerequisites
 
 Ensure you have the following installed:
-- Java 17 or higher
-- Docker and Docker Compose
-- Maven 3.8+ (or use included wrapper)
+- **Java 17 or higher** (tested with Java 25)
+- **Docker and Docker Compose**
+- **Maven 3.8+** (or use included wrapper)
+
+⚠️ **Note**: This project does NOT use Lombok due to Java 25 compatibility issues. All code uses manual implementations.
 
 ## Step-by-Step Setup
 
-### 1. Build Plugin Worker Images
+### 1. Build Maven Projects
 
-This is the FIRST step - build the plugin worker images that will be dynamically spawned:
+First, compile all Java modules:
 
 ```bash
 cd /Users/ramjana/dev/AI/agentic-server-platform-poc
-chmod +x build-images.sh
-./build-images.sh
+./mvnw package -DskipTests
 ```
 
-This will:
-- Compile all Maven projects
-- Build 3 plugin worker Docker images:
-  - `java-plugin-add:latest`
-  - `java-plugin-multiply:latest`
-  - `python-plugin-subtract:latest`
+⏱️ **Expected time**: 1-2 minutes (first build)
 
-⏱️ **Expected time**: 5-10 minutes (first build)
+**Troubleshooting**: If you see protobuf cleanup errors with `clean`, it's safe to ignore - just use `package` without `clean`.
 
-### 2. Start the Platform
+### 2. Build Plugin Worker Images
+
+Build the 3 plugin worker Docker images:
+
+```bash
+# Build Java plugin workers
+docker build -t java-plugin-add:latest -f java-plugin-add/Dockerfile .
+docker build -t java-plugin-multiply:latest -f java-plugin-multiply/Dockerfile .
+
+# Build Python plugin worker  
+docker build -t python-plugin-subtract:latest -f python-plugin-subtract/Dockerfile .
+```
+
+⏱️ **Expected time**: 2-3 minutes (downloads base images on first run)
+
+**Note**: Base images changed from Alpine to Debian for ARM64/M1 Mac compatibility.
+
+### 3. Start the Platform
 
 Launch the Plugin Gateway and Runtime Supervisors:
 
@@ -36,18 +49,20 @@ Launch the Plugin Gateway and Runtime Supervisors:
 docker-compose up -d
 ```
 
-This starts:
+This builds and starts:
 - **plugin-gateway** (port 8080) - Entry point
 - **java-runtime-supervisor** (port 9091) - Java worker manager
 - **python-runtime-supervisor** (port 9092) - Python worker manager
 
-### 3. Verify Services are Running
+⏱️ **Wait 10-15 seconds** for all services to initialize.
+
+### 4. Verify Services are Running
 
 ```bash
 docker-compose ps
 ```
 
-You should see 3 containers running:
+You should see 3 containers running with "Up" status:
 ```
 NAME                        STATUS
 plugin-gateway              Up
@@ -55,14 +70,14 @@ java-runtime-supervisor     Up
 python-runtime-supervisor   Up
 ```
 
-Check logs:
+Check logs to confirm all services started successfully:
 ```bash
-docker-compose logs -f
+docker-compose logs plugin-gateway | grep "Started"
 ```
 
-Wait for log messages indicating services are ready (usually 10-20 seconds).
+You should see: `Started PluginGatewayApplication in X seconds`
 
-### 4. Test the Platform
+### 5. Test the Platform
 
 #### Test Add Operation (Java Plugin)
 
@@ -103,15 +118,32 @@ curl -X POST http://localhost:8080/api/v1/calculate/subtract \
 {"result":5.0,"operation":"subtract","operand1":10.0,"operand2":5.0}
 ```
 
-### 5. Run All Tests
+### 6. Run All Tests
 
 Use the provided test script:
 
 ```bash
+chmod +x test-all.sh
 ./test-all.sh
 ```
 
-### 6. Observe Worker Containers
+**Expected Output**:
+```
+Testing Agentic Server Platform POC
+====================================
+1. Testing Add Operation (Java Plugin)
+Response: {"result":15.0,"operation":"add","operand1":10.0,"operand2":5.0}
+
+2. Testing Multiply Operation (Java Plugin)
+Response: {"result":50.0,"operation":"multiply","operand1":10.0,"operand2":5.0}
+
+3. Testing Subtract Operation (Python Plugin)
+Response: {"result":5.0,"operation":"subtract","operand1":10.0,"operand2":5.0}
+
+All tests completed!
+```
+
+### 7. Observe Worker Containers
 
 While a plugin is executing, you can see the worker container:
 
@@ -131,7 +163,9 @@ You should see a container like `worker-10001`.
 
 After the request completes, the worker container will be automatically destroyed.
 
-### 7. View Logs
+**Note**: Worker containers use the network name for communication, not port mapping, so they won't appear on host ports.
+
+### 8. View Logs
 
 **Plugin Gateway logs:**
 ```bash
@@ -148,11 +182,13 @@ docker-compose logs -f java-runtime-supervisor
 docker-compose logs -f python-runtime-supervisor
 ```
 
-### 8. Stop the Platform
+### 9. Stop the Platform
 
 ```bash
 docker-compose down
 ```
+
+This will stop and remove all platform service containers. Worker containers are automatically removed after use.
 
 ## What's Happening Behind the Scenes?
 
@@ -195,17 +231,30 @@ sudo usermod -aG docker $USER
 docker images | grep plugin
 
 # Rebuild if missing
-./build-images.sh
+docker build -t java-plugin-add:latest -f java-plugin-add/Dockerfile .
+docker build -t java-plugin-multiply:latest -f java-plugin-multiply/Dockerfile .
+docker build -t python-plugin-subtract:latest -f python-plugin-subtract/Dockerfile .
+```
+
+### Issue: Plugin Gateway won't start (gRPC errors)
+Check that gRPC version 1.58.0 is being used (not 1.60.0). The pom.xml should have:
+```xml
+<grpc.version>1.58.0</grpc.version>
+<protobuf.version>3.24.0</protobuf.version>
 ```
 
 ### Issue: Maven build fails
 ```bash
-# Clean and rebuild
-./mvnw clean install -DskipTests
+# If clean fails due to protobuf plugin, build without clean
+./mvnw package -DskipTests
 
-# Or with Docker
-docker run --rm -v $(pwd):/app -w /app maven:3.9-eclipse-temurin-17 mvn clean install -DskipTests
+# Or manually clean and rebuild
+rm -rf proto/target common/target plugin-gateway/target
+./mvnw package -DskipTests
 ```
+
+### Issue: Lombok compilation errors with Java 25
+**This project no longer uses Lombok**. If you see old Lombok-related errors, the code has been updated with manual implementations. Just rebuild.
 
 ## Understanding the Logs
 

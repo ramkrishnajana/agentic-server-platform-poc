@@ -1,7 +1,7 @@
 package com.webex.agentic.gateway.service;
 
-import lombok.Data;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -10,9 +10,10 @@ import java.util.Map;
 /**
  * Registry that maps primitives to their runtime configurations
  */
-@Slf4j
 @Service
 public class PluginRegistry {
+    
+    private static final Logger log = LoggerFactory.getLogger(PluginRegistry.class);
 
     private final Map<String, PluginSpec> registry = new HashMap<>();
 
@@ -53,13 +54,40 @@ public class PluginRegistry {
         return spec;
     }
 
-    @Data
     public static class PluginSpec {
         private final String id;
         private final String version;
         private final String language;
         private final String runtimeAddress;
         private final String entrypoint;
+        
+        public PluginSpec(String id, String version, String language, String runtimeAddress, String entrypoint) {
+            this.id = id;
+            this.version = version;
+            this.language = language;
+            this.runtimeAddress = runtimeAddress;
+            this.entrypoint = entrypoint;
+        }
+        
+        public String getId() {
+            return id;
+        }
+        
+        public String getVersion() {
+            return version;
+        }
+        
+        public String getLanguage() {
+            return language;
+        }
+        
+        public String getRuntimeAddress() {
+            return runtimeAddress;
+        }
+        
+        public String getEntrypoint() {
+            return entrypoint;
+        }
     }
 }
 

@@ -64,6 +64,14 @@
                     </execution>
                 </executions>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <!-- Proto module has no Lombok, skip annotation processing -->
+                    <proc>none</proc>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>

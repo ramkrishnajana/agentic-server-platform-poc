@@ -64,8 +64,7 @@ class PythonRuntimeSupervisor(RuntimeSupervisorServicer):
             cmd = [
                 "docker", "run",
                 "--name", container_name,
-                "--network", "agentic-network",
-                "-p", f"{port}:8080",
+                "--network", "agentic-server-platform-poc_agentic-network",
                 "-e", f"WORKER_ID={worker_id}",
                 "-e", f"PLUGIN_ID={request.plugin.id}",
                 "-d",

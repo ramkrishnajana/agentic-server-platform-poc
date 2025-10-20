@@ -4,7 +4,8 @@ import com.google.protobuf.Duration;
 import com.webex.agentic.proto.supervisor.*;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
@@ -14,9 +15,10 @@ import java.util.concurrent.TimeUnit;
 /**
  * Client to communicate with Runtime Supervisor services
  */
-@Slf4j
 @Service
 public class RuntimeSupervisorClient {
+    
+    private static final Logger log = LoggerFactory.getLogger(RuntimeSupervisorClient.class);
 
     private final Map<String, ManagedChannel> channels = new ConcurrentHashMap<>();
     private final Map<String, RuntimeSupervisorGrpc.RuntimeSupervisorBlockingStub> stubs = new ConcurrentHashMap<>();

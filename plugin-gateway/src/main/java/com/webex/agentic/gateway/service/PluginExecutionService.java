@@ -8,8 +8,8 @@ import com.webex.agentic.proto.ppp.*;
 import com.webex.agentic.proto.supervisor.*;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.Iterator;
@@ -19,14 +19,19 @@ import java.util.concurrent.TimeUnit;
 /**
  * Service that executes plugin operations
  */
-@Slf4j
 @Service
-@RequiredArgsConstructor
 public class PluginExecutionService {
+    
+    private static final Logger log = LoggerFactory.getLogger(PluginExecutionService.class);
 
     private final PluginRegistry pluginRegistry;
     private final RuntimeSupervisorClient runtimeClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    
+    public PluginExecutionService(PluginRegistry pluginRegistry, RuntimeSupervisorClient runtimeClient) {
+        this.pluginRegistry = pluginRegistry;
+        this.runtimeClient = runtimeClient;
+    }
 
     public CalculationResult executeCalculation(String operation, CalculationRequest request) throws Exception {
         log.info("Executing {} operation: {} on {}", operation, request.getOperand1(), request.getOperand2());
@@ -168,13 +173,9 @@ public class PluginExecutionService {
     }
 
     private String getWorkerAddress(String runtimeAddress, String workerId) {
-        // Extract worker port from worker ID (format: "worker-<port>")
-        String[] parts = workerId.split("-");
-        if (parts.length >= 2) {
-            String host = runtimeAddress.split(":")[0];
-            return host + ":" + parts[1];
-        }
-        throw new IllegalArgumentException("Invalid worker ID format: " + workerId);
+        // Worker containers communicate via container name on same network
+        // Worker exposes gRPC on port 8080 internally
+        return workerId + ":8080";
     }
 }
 

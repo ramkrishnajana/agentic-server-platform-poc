@@ -5,19 +5,23 @@ import com.google.protobuf.Timestamp;
 import com.webex.agentic.proto.supervisor.*;
 import com.webex.agentic.runtime.java.service.WorkerManager;
 import io.grpc.stub.StreamObserver;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import net.devh.boot.grpc.server.service.GrpcService;
 
 /**
  * gRPC service implementation for Runtime Supervisor API
  */
-@Slf4j
 @GrpcService
-@RequiredArgsConstructor
 public class RuntimeSupervisorService extends RuntimeSupervisorGrpc.RuntimeSupervisorImplBase {
+    
+    private static final Logger log = LoggerFactory.getLogger(RuntimeSupervisorService.class);
 
     private final WorkerManager workerManager;
+    
+    public RuntimeSupervisorService(WorkerManager workerManager) {
+        this.workerManager = workerManager;
+    }
 
     @Override
     public void ensurePlugin(EnsurePluginRequest request, StreamObserver<EnsurePluginResponse> responseObserver) {
