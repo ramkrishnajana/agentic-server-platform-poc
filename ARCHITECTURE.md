@@ -62,6 +62,7 @@ This POC demonstrates a production-grade plugin runtime architecture for an Agen
 - **Add Plugin** (Java): Adds two numbers
 - **Multiply Plugin** (Java): Multiplies two numbers
 - **Subtract Plugin** (Python): Subtracts two numbers
+- **Divide Plugin** (Python): Divides two numbers with zero-division error handling
 
 Each worker:
 - Runs in isolated Docker container
@@ -191,8 +192,12 @@ agentic-server-platform-poc/
 │   │       ├── Dockerfile.native   # GraalVM native build
 │   │       └── src/main/resources/application.yml
 │   └── python-plugins/
-│       └── subtract/              # Subtract Plugin Worker
-│           ├── subtract_plugin.py
+│       ├── subtract/              # Subtract Plugin Worker
+│       │   ├── subtract_plugin.py
+│       │   ├── requirements.txt
+│       │   └── Dockerfile
+│       └── divide/                # Divide Plugin Worker
+│           ├── divide_plugin.py
 │           ├── requirements.txt
 │           └── Dockerfile
 │

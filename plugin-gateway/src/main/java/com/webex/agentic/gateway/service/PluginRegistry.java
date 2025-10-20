@@ -43,6 +43,14 @@ public class PluginRegistry {
             "subtract_plugin.py"
         ));
 
+        registry.put("divide_numbers", new PluginSpec(
+            "divide_numbers",
+            "1.0.0",
+            "python",
+            "python-runtime-supervisor:9092",
+            "divide_plugin.py"
+        ));
+
         log.info("Registered {} plugins", registry.size());
     }
 

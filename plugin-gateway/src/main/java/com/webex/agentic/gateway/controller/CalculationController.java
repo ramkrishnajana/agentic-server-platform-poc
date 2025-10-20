@@ -40,5 +40,11 @@ public class CalculationController {
         return executionService.executeCalculation("subtract_numbers", request)
                 .doOnError(e -> log.error("Error executing subtract operation", e));
     }
+
+    @PostMapping("/divide")
+    public Mono<CalculationResult> divide(@RequestBody CalculationRequest request) {
+        return executionService.executeCalculation("divide_numbers", request)
+                .doOnError(e -> log.error("Error executing divide operation", e));
+    }
 }
 

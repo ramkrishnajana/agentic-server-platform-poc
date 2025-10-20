@@ -133,6 +133,8 @@ class PythonRuntimeSupervisor(RuntimeSupervisorServicer):
     def _get_image_name(self, plugin_id: str) -> str:
         if plugin_id == "subtract_numbers":
             return "python-plugin-subtract:latest"
+        elif plugin_id == "divide_numbers":
+            return "python-plugin-divide:latest"
         else:
             raise ValueError(f"Unknown plugin: {plugin_id}")
 

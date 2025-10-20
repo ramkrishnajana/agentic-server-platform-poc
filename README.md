@@ -49,6 +49,7 @@ This is a Proof of Concept implementation of the Agentic Server Platform demonst
 1. **Add Numbers** (Java) - Adds two numbers
 2. **Multiply Numbers** (Java) - Multiplies two numbers
 3. **Subtract Numbers** (Python) - Subtracts two numbers
+4. **Divide Numbers** (Python) - Divides two numbers (with zero-division error handling)
 
 ## Prerequisites
 
@@ -83,8 +84,9 @@ Build the plugin worker Docker images:
 docker build -t java-plugin-add:latest -f plugins/java-plugins/add/Dockerfile .
 docker build -t java-plugin-multiply:latest -f plugins/java-plugins/multiply/Dockerfile .
 
-# Build Python plugin worker  
+# Build Python plugin workers
 docker build -t python-plugin-subtract:latest -f plugins/python-plugins/subtract/Dockerfile .
+docker build -t python-plugin-divide:latest -f plugins/python-plugins/divide/Dockerfile .
 ```
 
 ### 3. Start the Platform
@@ -183,6 +185,44 @@ Expected response:
   "operation": "subtract",
   "operand1": 10.0,
   "operand2": 5.0
+}
+```
+
+### Test Divide Operation (Python Plugin)
+
+```bash
+curl -X POST http://localhost:8080/api/v1/calculate/divide \
+  -H "Content-Type: application/json" \
+  -d '{
+    "operand1": 10,
+    "operand2": 5
+  }'
+```
+
+Expected response:
+```json
+{
+  "result": 2.0,
+  "operation": "divide",
+  "operand1": 10.0,
+  "operand2": 5.0
+}
+```
+
+**Division by Zero Test:**
+```bash
+curl -X POST http://localhost:8080/api/v1/calculate/divide \
+  -H "Content-Type: application/json" \
+  -d '{"operand1": 10, "operand2": 0}'
+```
+
+Expected response (error):
+```json
+{
+  "timestamp": "...",
+  "path": "/api/v1/calculate/divide",
+  "status": 500,
+  "error": "Internal Server Error"
 }
 ```
 
@@ -324,8 +364,13 @@ agentic-server-platform-poc/
 │   │       ├── Dockerfile
 │   │       └── Dockerfile.native
 │   └── python-plugins/
-│       └── subtract/              # Subtract plugin
-│           ├── subtract_plugin.py
+│       ├── subtract/              # Subtract plugin
+│       │   ├── subtract_plugin.py
+│       │   ├── requirements.txt
+│       │   └── Dockerfile
+│       └── divide/                # Divide plugin
+│           ├── divide_plugin.py
+│           ├── requirements.txt
 │           └── Dockerfile
 ├── docs/                          # UML diagrams and documentation
 ├── docker-compose.yml             # Platform orchestration
@@ -334,8 +379,8 @@ agentic-server-platform-poc/
 
 ## Key Features Demonstrated
 
-✅ **Plugin Architecture**: Extensible plugin system with registry
-✅ **Multi-Language Support**: Java and Python plugins
+✅ **Plugin Architecture**: Extensible plugin system with registry (4 plugins: Add, Multiply, Subtract, Divide)
+✅ **Multi-Language Support**: Java and Python plugins (2 Java, 2 Python)
 ✅ **Container Isolation**: Each plugin runs in isolated container
 ✅ **Dynamic Worker Management**: Containers spawned on-demand and destroyed after use
 ✅ **gRPC Communication**: High-performance inter-service communication

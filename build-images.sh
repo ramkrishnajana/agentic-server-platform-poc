@@ -17,6 +17,9 @@ docker build -t java-plugin-multiply:latest -f plugins/java-plugins/multiply/Doc
 echo "Building Python Subtract Plugin image..."
 docker build -t python-plugin-subtract:latest -f plugins/python-plugins/subtract/Dockerfile .
 
+echo "Building Python Divide Plugin image..."
+docker build -t python-plugin-divide:latest -f plugins/python-plugins/divide/Dockerfile .
+
 echo "All plugin worker images built successfully!"
 echo ""
 echo "Now you can run: docker-compose up -d"

@@ -37,8 +37,9 @@ Build the 3 plugin worker Docker images:
 docker build -t java-plugin-add:latest -f plugins/java-plugins/add/Dockerfile .
 docker build -t java-plugin-multiply:latest -f plugins/java-plugins/multiply/Dockerfile .
 
-# Build Python plugin worker  
+# Build Python plugin workers
 docker build -t python-plugin-subtract:latest -f plugins/python-plugins/subtract/Dockerfile .
+docker build -t python-plugin-divide:latest -f plugins/python-plugins/divide/Dockerfile .
 ```
 
 ⏱️ **Expected time**: 2-3 minutes (downloads base images on first run)
@@ -128,6 +129,31 @@ curl -X POST http://localhost:8080/api/v1/calculate/subtract \
 {"result":5.0,"operation":"subtract","operand1":10.0,"operand2":5.0}
 ```
 
+#### Test Divide Operation (Python Plugin)
+
+```bash
+curl -X POST http://localhost:8080/api/v1/calculate/divide \
+  -H "Content-Type: application/json" \
+  -d '{"operand1": 10, "operand2": 5}'
+```
+
+**Expected Output:**
+```json
+{"result":2.0,"operation":"divide","operand1":10.0,"operand2":5.0}
+```
+
+**Test Error Handling (Division by Zero):**
+```bash
+curl -X POST http://localhost:8080/api/v1/calculate/divide \
+  -H "Content-Type: application/json" \
+  -d '{"operand1": 10, "operand2": 0}'
+```
+
+**Expected Output (Error):**
+```json
+{"timestamp":"...","path":"/api/v1/calculate/divide","status":500,"error":"Internal Server Error"}
+```
+
 ### 6. Run All Tests
 
 Use the provided test script:
@@ -152,6 +178,8 @@ Response: {"result":5.0,"operation":"subtract","operand1":10.0,"operand2":5.0}
 
 All tests completed!
 ```
+
+**Note**: The test script doesn't include divide yet. Test divide manually using the curl command above.
 
 ### 7. Observe Worker Containers
 
@@ -244,6 +272,7 @@ docker images | grep plugin
 docker build -t java-plugin-add:latest -f plugins/java-plugins/add/Dockerfile .
 docker build -t java-plugin-multiply:latest -f plugins/java-plugins/multiply/Dockerfile .
 docker build -t python-plugin-subtract:latest -f plugins/python-plugins/subtract/Dockerfile .
+docker build -t python-plugin-divide:latest -f plugins/python-plugins/divide/Dockerfile .
 ```
 
 ### Issue: Plugin Gateway won't start (gRPC errors)
