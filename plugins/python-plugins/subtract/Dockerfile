@@ -11,10 +11,10 @@ RUN pip install grpcio-tools==1.60.0 && \
         --grpc_python_out=/app \
         /app/proto/*.proto
 
-COPY python-plugin-subtract/requirements.txt .
+COPY plugins/python-plugins/subtract/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY python-plugin-subtract/subtract_plugin.py .
+COPY plugins/python-plugins/subtract/subtract_plugin.py .
 
 EXPOSE 8080
 CMD ["python", "subtract_plugin.py"]

@@ -153,10 +153,11 @@ agentic-server-platform-poc/
 │
 ├── plugin-gateway/                 # Entry Point (Port 8080)
 │   ├── src/main/java/.../gateway/
-│   │   ├── controller/             # REST endpoints
+│   │   ├── controller/             # Reactive REST endpoints (WebFlux)
 │   │   ├── service/                # Business logic
 │   │   └── PluginGatewayApplication.java
 │   ├── Dockerfile
+│   ├── Dockerfile.native           # GraalVM native build
 │   └── src/main/resources/application.yml
 │
 ├── java-runtime-supervisor/        # Java Worker Manager (Port 9091)
@@ -165,6 +166,7 @@ agentic-server-platform-poc/
 │   │   ├── grpc/RuntimeSupervisorService.java
 │   │   └── JavaRuntimeSupervisorApplication.java
 │   ├── Dockerfile
+│   ├── Dockerfile.native           # GraalVM native build
 │   └── src/main/resources/application.yml
 │
 ├── python-runtime-supervisor/      # Python Worker Manager (Port 9092)
@@ -172,24 +174,33 @@ agentic-server-platform-poc/
 │   ├── requirements.txt
 │   └── Dockerfile
 │
-├── java-plugin-add/               # Add Plugin Worker
-│   ├── src/main/java/.../plugin/add/
-│   │   ├── service/AddPluginService.java
-│   │   └── AddPluginApplication.java
-│   ├── Dockerfile
-│   └── src/main/resources/application.yml
+├── plugins/                        # Plugin Modules (Organized by Language)
+│   ├── java-plugins/
+│   │   ├── add/                   # Add Plugin Worker
+│   │   │   ├── src/main/java/.../plugin/add/
+│   │   │   │   ├── service/AddPluginService.java
+│   │   │   │   └── AddPluginApplication.java
+│   │   │   ├── Dockerfile
+│   │   │   ├── Dockerfile.native   # GraalVM native build
+│   │   │   └── src/main/resources/application.yml
+│   │   └── multiply/              # Multiply Plugin Worker
+│   │       ├── src/main/java/.../plugin/multiply/
+│   │       │   ├── service/MultiplyPluginService.java
+│   │       │   └── MultiplyPluginApplication.java
+│   │       ├── Dockerfile
+│   │       ├── Dockerfile.native   # GraalVM native build
+│   │       └── src/main/resources/application.yml
+│   └── python-plugins/
+│       └── subtract/              # Subtract Plugin Worker
+│           ├── subtract_plugin.py
+│           ├── requirements.txt
+│           └── Dockerfile
 │
-├── java-plugin-multiply/          # Multiply Plugin Worker
-│   ├── src/main/java/.../plugin/multiply/
-│   │   ├── service/MultiplyPluginService.java
-│   │   └── MultiplyPluginApplication.java
-│   ├── Dockerfile
-│   └── src/main/resources/application.yml
-│
-├── python-plugin-subtract/        # Subtract Plugin Worker
-│   ├── subtract_plugin.py
-│   ├── requirements.txt
-│   └── Dockerfile
+├── docs/                          # UML Diagrams & Documentation
+│   ├── add-plugin-sequence.puml
+│   ├── subtract-plugin-sequence.puml
+│   ├── API-FLOW-DIAGRAMS.md
+│   └── reactive-webflux-flow.md
 │
 ├── docker-compose.yml             # Orchestration
 ├── build-images.sh                # Build script

@@ -1,4 +1,4 @@
-# GraalVM Native Image Dockerfile for Multiply Plugin
+# GraalVM Native Image Dockerfile for Add Plugin
 # Build time: 3-5 minutes
 # Runtime: Faster startup (~50-100ms vs 2-3s)
 
@@ -13,13 +13,13 @@ COPY . .
 RUN chmod +x mvnw
 
 # Build native image
-RUN ./mvnw -Pnative package -DskipTests -pl java-plugin-multiply -am
+RUN ./mvnw -Pnative package -DskipTests -pl plugins/java-plugins/add -am
 
 FROM ubuntu:22.04
 WORKDIR /app
 
 # Copy native executable
-COPY --from=builder /workspace/java-plugin-multiply/target/java-plugin-multiply /app/app
+COPY --from=builder /workspace/plugins/java-plugins/add/target/add /app/app
 
 EXPOSE 8080
 ENTRYPOINT ["./app"]

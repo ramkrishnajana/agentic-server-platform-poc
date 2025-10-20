@@ -34,11 +34,11 @@ Build the 3 plugin worker Docker images:
 
 ```bash
 # Build Java plugin workers
-docker build -t java-plugin-add:latest -f java-plugin-add/Dockerfile .
-docker build -t java-plugin-multiply:latest -f java-plugin-multiply/Dockerfile .
+docker build -t java-plugin-add:latest -f plugins/java-plugins/add/Dockerfile .
+docker build -t java-plugin-multiply:latest -f plugins/java-plugins/multiply/Dockerfile .
 
 # Build Python plugin worker  
-docker build -t python-plugin-subtract:latest -f python-plugin-subtract/Dockerfile .
+docker build -t python-plugin-subtract:latest -f plugins/python-plugins/subtract/Dockerfile .
 ```
 
 ⏱️ **Expected time**: 2-3 minutes (downloads base images on first run)
@@ -47,7 +47,7 @@ docker build -t python-plugin-subtract:latest -f python-plugin-subtract/Dockerfi
 
 **🚀 GraalVM Native Images (Optional)**: For faster startup, you can build native images using `Dockerfile.native`:
 ```bash
-docker build -t java-plugin-add:native -f java-plugin-add/Dockerfile.native .
+docker build -t java-plugin-add:native -f plugins/java-plugins/add/Dockerfile.native .
 ```
 ⏱️ Native builds take 5-10 minutes but result in ~50-100ms startup time.
 
@@ -241,9 +241,9 @@ sudo usermod -aG docker $USER
 docker images | grep plugin
 
 # Rebuild if missing
-docker build -t java-plugin-add:latest -f java-plugin-add/Dockerfile .
-docker build -t java-plugin-multiply:latest -f java-plugin-multiply/Dockerfile .
-docker build -t python-plugin-subtract:latest -f python-plugin-subtract/Dockerfile .
+docker build -t java-plugin-add:latest -f plugins/java-plugins/add/Dockerfile .
+docker build -t java-plugin-multiply:latest -f plugins/java-plugins/multiply/Dockerfile .
+docker build -t python-plugin-subtract:latest -f plugins/python-plugins/subtract/Dockerfile .
 ```
 
 ### Issue: Plugin Gateway won't start (gRPC errors)

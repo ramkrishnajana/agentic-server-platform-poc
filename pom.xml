@@ -14,11 +14,11 @@
 
     <modules>
         <module>proto</module>
+        <module>common</module>
         <module>plugin-gateway</module>
         <module>java-runtime-supervisor</module>
-        <module>java-plugin-add</module>
-        <module>java-plugin-multiply</module>
-        <module>common</module>
+        <module>plugins/java-plugins/add</module>
+        <module>plugins/java-plugins/multiply</module>
     </modules>
 
     <properties>

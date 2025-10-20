@@ -9,13 +9,13 @@ echo "Building Maven projects..."
 
 # Build plugin worker images (these need to be built separately as they are spawned dynamically)
 echo "Building Java Add Plugin image..."
-docker build -t java-plugin-add:latest -f java-plugin-add/Dockerfile .
+docker build -t java-plugin-add:latest -f plugins/java-plugins/add/Dockerfile .
 
 echo "Building Java Multiply Plugin image..."
-docker build -t java-plugin-multiply:latest -f java-plugin-multiply/Dockerfile .
+docker build -t java-plugin-multiply:latest -f plugins/java-plugins/multiply/Dockerfile .
 
 echo "Building Python Subtract Plugin image..."
-docker build -t python-plugin-subtract:latest -f python-plugin-subtract/Dockerfile .
+docker build -t python-plugin-subtract:latest -f plugins/python-plugins/subtract/Dockerfile .
 
 echo "All plugin worker images built successfully!"
 echo ""

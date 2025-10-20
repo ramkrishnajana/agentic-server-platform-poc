@@ -80,11 +80,11 @@ Build the plugin worker Docker images:
 
 ```bash
 # Build Java plugin workers
-docker build -t java-plugin-add:latest -f java-plugin-add/Dockerfile .
-docker build -t java-plugin-multiply:latest -f java-plugin-multiply/Dockerfile .
+docker build -t java-plugin-add:latest -f plugins/java-plugins/add/Dockerfile .
+docker build -t java-plugin-multiply:latest -f plugins/java-plugins/multiply/Dockerfile .
 
-# Build Python plugin worker
-docker build -t python-plugin-subtract:latest -f python-plugin-subtract/Dockerfile .
+# Build Python plugin worker  
+docker build -t python-plugin-subtract:latest -f plugins/python-plugins/subtract/Dockerfile .
 ```
 
 ### 3. Start the Platform
@@ -274,8 +274,8 @@ The project supports building GraalVM native images for faster startup and lower
 #### Option 2: Using Dockerfile.native (Recommended)
 ```bash
 # Build native image Docker containers
-docker build -t java-plugin-add:native -f java-plugin-add/Dockerfile.native .
-docker build -t java-plugin-multiply:native -f java-plugin-multiply/Dockerfile.native .
+docker build -t java-plugin-add:native -f plugins/java-plugins/add/Dockerfile.native .
+docker build -t java-plugin-multiply:native -f plugins/java-plugins/multiply/Dockerfile.native .
 docker build -t plugin-gateway:native -f plugin-gateway/Dockerfile.native .
 ```
 
@@ -300,10 +300,10 @@ agentic-server-platform-poc/
 │       ├── runtime_supervisor.proto  # Runtime Supervisor API
 │       └── plugin_protocol.proto     # Platform-Plugin Protocol (PPP)
 ├── common/                         # Shared models
-├── plugin-gateway/                 # Spring Boot Gateway
+├── plugin-gateway/                 # Spring Boot Gateway (WebFlux)
 │   ├── src/main/java/
 │   │   └── com/webex/agentic/gateway/
-│   │       ├── controller/         # REST controllers
+│   │       ├── controller/         # Reactive REST controllers
 │   │       └── service/            # Business logic
 │   └── Dockerfile
 ├── java-runtime-supervisor/        # Java worker manager
@@ -313,12 +313,21 @@ agentic-server-platform-poc/
 ├── python-runtime-supervisor/      # Python worker manager
 │   ├── runtime_supervisor.py
 │   └── Dockerfile
-├── java-plugin-add/               # Add plugin
-│   └── Dockerfile
-├── java-plugin-multiply/          # Multiply plugin
-│   └── Dockerfile
-├── python-plugin-subtract/        # Subtract plugin
-│   └── Dockerfile
+├── plugins/                        # Plugin modules (organized by language)
+│   ├── java-plugins/
+│   │   ├── add/                   # Add plugin
+│   │   │   ├── src/main/java/
+│   │   │   ├── Dockerfile
+│   │   │   └── Dockerfile.native
+│   │   └── multiply/              # Multiply plugin
+│   │       ├── src/main/java/
+│   │       ├── Dockerfile
+│   │       └── Dockerfile.native
+│   └── python-plugins/
+│       └── subtract/              # Subtract plugin
+│           ├── subtract_plugin.py
+│           └── Dockerfile
+├── docs/                          # UML diagrams and documentation
 ├── docker-compose.yml             # Platform orchestration
 └── build-images.sh                # Build script
 ```
